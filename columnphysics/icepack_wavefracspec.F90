@@ -76,7 +76,7 @@
       integer(kind=int_kind), intent(in) :: &
          nfreq                    ! number of wave frequencies
 
-      real(kind=dbl_kind), dimension(:), intent(out) :: &
+      real(kind=dbl_kind), dimension(nfreq), intent(out) :: &
          wave_spectrum_profile, & ! ocean surface wave spectrum as a function of frequency
                                   ! power spectral density of surface elevation, E(f) (units m^2 s)
          wavefreq,              & ! wave frequencies (s^-1)
@@ -84,25 +84,38 @@
 
 !autodocument_end
       ! local variables
-      integer (kind=int_kind) :: k
+      integer (kind=int_kind) :: &
+         k                        ! loop index for frequencies
+
+      real(kind=dbl_kind) :: & 
+         fmin,                  & ! minimum frequency (s^-1)
+         fmax,                  & ! maximum frequency (s^-1)
+         om1,                   & ! angular frequency (rad s^-1)
+         om2,                   & ! angular frequency (rad s^-1)
+         dom,                   & ! width of angular frequency bins (rad s^-1)
+         pi
 
       real(kind=dbl_kind), dimension(100) :: &
          wave_spectrum_data       ! default values for nfreq profile
 
+      real(kind=dbl_kind), dimension(nfreq) :: & 
+         om,                   & ! angular frequency vector (rad s^-1)
+         T                       ! period vector (s)
+
       ! set for 25 frequencies
 
-      wave_spectrum_data = c0
+      wave_spectrum_data(:) = 0.07201970368623734
 
       ! FOR TESTING ONLY - do not use for actual runs!!
-      wave_spectrum_data(1) = 0.00015429197810590267
-      wave_spectrum_data(2) = 0.002913531381636858
-      wave_spectrum_data(3) = 0.02312942035496235
-      wave_spectrum_data(4) = 0.07201970368623734
-      wave_spectrum_data(5) = 0.06766948103904724
-      wave_spectrum_data(6) = 0.005527883302420378
-      wave_spectrum_data(7) = 3.326293881400488e-05
-      wave_spectrum_data(8) = 6.815936703929992e-10
-      wave_spectrum_data(9) = 2.419401186610744e-20
+      ! wave_spectrum_data(1) = 0.00015429197810590267
+      ! wave_spectrum_data(2) = 0.002913531381636858
+      ! wave_spectrum_data(3) = 0.02312942035496235
+      ! wave_spectrum_data(4) = 0.07201970368623734
+      ! wave_spectrum_data(5) = 0.06766948103904724
+      ! wave_spectrum_data(6) = 0.005527883302420378
+      ! wave_spectrum_data(7) = 3.326293881400488e-05
+      ! wave_spectrum_data(8) = 6.815936703929992e-10
+      ! wave_spectrum_data(9) = 2.419401186610744e-20
 
       do k = 1, nfreq
          wave_spectrum_profile(k) = wave_spectrum_data(k)
@@ -118,16 +131,51 @@
                         0.17201911,  0.18922101,  0.20814312,  0.22895744,  0.25185317, &
                         0.27703848,  0.30474234,  0.33521661,  0.36873826,  0.40561208 /)
 
-      elseif (nfreq == 31) then
-         wavefreq = (/ 0.001 , 0.0343, 0.0676, 0.1009, 0.1342, 0.1675, 0.2008, 0.2341, 0.2674, &
-                     0.3007, 0.334 , 0.3673, 0.4006, 0.4339, 0.4672, 0.5005, 0.5338, 0.5671, &
-                     0.6004, 0.6337, 0.667 , 0.7003, 0.7336, 0.7669, 0.8002, 0.8335, 0.8668, &
-                     0.9001, 0.9334, 0.9667, 1.0 /)
+         ! boundaries of bin n are at f(n)*sqrt(1/C) and f(n)*sqrt(C)
+         dwavefreq(:) = wavefreq(:)*(SQRT(1.1_dbl_kind) - SQRT(c1/1.1_dbl_kind))
 
+      else
+         ! wavefreq = (/ 0.001 , 0.0343, 0.0676, 0.1009, 0.1342, 0.1675, 0.2008, 0.2341, 0.2674, &
+         !             0.3007, 0.334 , 0.3673, 0.4006, 0.4339, 0.4672, 0.5005, 0.5338, 0.5671, &
+         !             0.6004, 0.6337, 0.667 , 0.7003, 0.7336, 0.7669, 0.8002, 0.8335, 0.8668, &
+         !             0.9001, 0.9334, 0.9667, 1.0 /)
+         wavefreq = (/ 0.042     , 0.05393333, 0.06586667, 0.0778    , 0.08973333, &
+                     0.10166667, 0.1136    , 0.12553333, 0.13746667, 0.1494    , &
+                     0.16133333, 0.17326667, 0.1852    , 0.19713333, 0.20906667, &
+                     0.221     , 0.23293333, 0.24486667, 0.2568    , 0.26873333, &
+                     0.28066667, 0.2926    , 0.30453333, 0.31646667, 0.3284    , &
+                     0.34033333, 0.35226667, 0.3642    , 0.37613333, 0.38806667, &
+                     0.4       /)
+
+         ! ! Set frequency range
+         ! fmin = 0.042_dbl_kind
+         ! fmax = c1 / 2.5_dbl_kind
+
+         ! ! Convert to angular frequency
+         ! om1 = c2 * pi * fmin  ! 2π*fmin
+         ! om2 = c2 * pi * fmax  ! 2π*fmax
+
+         ! ! Angular frequency step
+         ! dom = (om2 - om1) / real(nfreq - 1, dbl_kind)
+
+         ! do k = 1, nfreq
+         !    om(k)       = om1 + (k-1) * dom
+         !    T(k)        = c2 * pi / om(k)
+         !    wavefreq(k) = om(k) / (c2 * pi)
+         !    ! lam_wtr_in(k)   = gravit*(T(k)**c2)/c2/pi
+         !    ! k_wtr_in(k)     = c2*pi/lam_wtr_in(k)
+         ! end do
+
+         dwavefreq(1) = wavefreq(1)
+         do k = 2, nfreq
+            dwavefreq(k) = wavefreq(k) - wavefreq(k-1)
+         end do
+
+         ! dwavefreq(:) = wavefreq(:)*(SQRT(1.1_dbl_kind) - SQRT(c1/1.1_dbl_kind))
+
+         
       endif
-      
-      ! boundaries of bin n are at f(n)*sqrt(1/C) and f(n)*sqrt(C)
-      dwavefreq(:) = wavefreq(:)*(SQRT(1.1_dbl_kind) - SQRT(c1/1.1_dbl_kind))
+   
 
       end subroutine icepack_init_wave
 
@@ -253,6 +301,11 @@
       character(len=*),parameter :: &
          subname='(icepack_step_wavefracture)'
 
+      !------------------------------------
+
+      !------------------------------------
+      ! Noah Day - Clean up the trcrn before the subroutine
+      call icepack_cleanup_fsd (trcrn(nt_fsd:nt_fsd+nfsd-1,:) )
       !------------------------------------
 
       ! initialize
@@ -546,6 +599,9 @@
 
       if (iter >= max_no_iter) then
          write(warnstr,*) subname,'warning: wave_frac struggling to converge'
+         write(warnstr,*) '   fracerror = ', fracerror
+         write(warnstr,*) '   prev_frac_local = ', prev_frac_local
+         write(warnstr,*) '   hbar = ', hbar
          call icepack_warnings_add(warnstr)
       endif
 

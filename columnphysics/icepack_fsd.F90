@@ -410,7 +410,7 @@
          if (afsd(k) < puny) afsd(k) = c0
       enddo
 
-      tot = sum(afsd(:))
+      tot = sum(abs(afsd(:)))
       if (tot > puny) then
          do k = 1, nfsd
             afsd(k) = afsd(k) / tot ! normalize
