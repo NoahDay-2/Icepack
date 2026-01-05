@@ -9,6 +9,7 @@
       use icepack_kinds
       use icepack_parameters, only: c0, c1, puny, rhos, rsnw_fall, rhosnew
       use icepack_parameters, only: snwredist, snwgrain
+      use icepack_parameters, only: pndhyps, pndfrbd, pndhead, pndmacr
       use icepack_warnings, only: warnstr, icepack_warnings_add
       use icepack_warnings, only: icepack_warnings_setabort, icepack_warnings_aborted
 
@@ -95,8 +96,7 @@
          nt_bgc_DMS   = 0, & !
          nt_bgc_PON   = 0, & ! zooplankton and detritus
          nt_bgc_hum   = 0, & ! humic material
-         nt_zbgc_frac = 0, & ! fraction of tracer in the mobile phase
-         nt_bgc_S     = 0    ! Bulk salinity in fraction ice with dynamic salinity (Bio grid) (deprecated)
+         nt_zbgc_frac = 0    ! fraction of tracer in the mobile phase
 
       logical (kind=log_kind), public :: &
          tr_iage      = .false., & ! if .true., use age tracer
@@ -105,6 +105,7 @@
          tr_pond      = .false., & ! if .true., use melt pond tracer
          tr_pond_lvl  = .false., & ! if .true., use level-ice pond tracer
          tr_pond_topo = .false., & ! if .true., use explicit topography-based ponds
+         tr_pond_sealvl=.false., & ! if .true., use sealvl pond parameterization
          tr_snow      = .false., & ! if .true., use snow redistribution or metamorphosis tracers
          tr_iso       = .false., & ! if .true., use isotope tracers
          tr_aero      = .false., & ! if .true., use aerosol tracers
@@ -206,7 +207,7 @@
 
       subroutine icepack_init_tracer_flags(&
            tr_iage_in, tr_FY_in, tr_lvl_in, tr_snow_in, &
-           tr_pond_in, tr_pond_lvl_in, tr_pond_topo_in, &
+           tr_pond_in, tr_pond_lvl_in, tr_pond_topo_in, tr_pond_sealvl_in, &
            tr_fsd_in, tr_aero_in, tr_iso_in, tr_brine_in, tr_zaero_in, &
            tr_bgc_Nit_in, tr_bgc_N_in, tr_bgc_DON_in, tr_bgc_C_in, tr_bgc_chl_in, &
            tr_bgc_Am_in, tr_bgc_Sil_in, tr_bgc_DMS_in, tr_bgc_Fe_in, tr_bgc_hum_in, &
@@ -219,6 +220,7 @@
              tr_pond_in      , & ! if .true., use melt pond tracer
              tr_pond_lvl_in  , & ! if .true., use level-ice pond tracer
              tr_pond_topo_in , & ! if .true., use explicit topography-based ponds
+             tr_pond_sealvl_in,& ! if .true., use sealvl pond parameteriztion
              tr_snow_in      , & ! if .true., use snow redistribution or metamorphosis tracers
              tr_fsd_in       , & ! if .true., use floe size distribution tracers
              tr_iso_in       , & ! if .true., use isotope tracers
@@ -247,6 +249,7 @@
         if (present(tr_pond_in)) tr_pond = tr_pond_in
         if (present(tr_pond_lvl_in) ) tr_pond_lvl  = tr_pond_lvl_in
         if (present(tr_pond_topo_in)) tr_pond_topo = tr_pond_topo_in
+        if (present(tr_pond_sealvl_in)) tr_pond_sealvl = tr_pond_sealvl_in
         if (present(tr_snow_in)   ) tr_snow    = tr_snow_in
         if (present(tr_fsd_in)    ) tr_fsd     = tr_fsd_in
         if (present(tr_iso_in)    ) tr_iso     = tr_iso_in
@@ -265,6 +268,29 @@
         if (present(tr_bgc_hum_in)) tr_bgc_hum = tr_bgc_hum_in
         if (present(tr_bgc_PON_in)) tr_bgc_PON = tr_bgc_PON_in
 
+        ! tcraig, July, 2025
+        ! This should not be here.  These options should either
+        ! - be moved to namelist
+        ! - be removed and have all the features selected by tr_pond_* values
+        !
+        ! Because we don't actually know what options work for the various
+        ! pond schemes (beyond the settings below), and we don't know which
+        ! options we want to be chooseable overall, we are leaving the declarations
+        ! in icepack_parameters and we are hardwiring them here so they will
+        ! be consistent with the tr_pond_sealvl settings as best as we know.
+
+        if (tr_pond_sealvl) then
+           pndhyps = 'sealevel'
+           pndfrbd = 'category'
+           pndhead = 'hyps'
+           pndmacr = 'head'
+        else
+           pndhyps = 'sealevel'
+           pndfrbd = 'floor'
+           pndhead = 'perched'
+           pndmacr = 'lambda'
+        endif
+
       end subroutine icepack_init_tracer_flags
 
 !=======================================================================
@@ -273,7 +299,7 @@
 
       subroutine icepack_query_tracer_flags(&
            tr_iage_out, tr_FY_out, tr_lvl_out, tr_snow_out, &
-           tr_pond_out, tr_pond_lvl_out, tr_pond_topo_out, &
+           tr_pond_out, tr_pond_lvl_out, tr_pond_topo_out, tr_pond_sealvl_out, &
            tr_fsd_out, tr_aero_out, tr_iso_out, tr_brine_out, tr_zaero_out, &
            tr_bgc_Nit_out, tr_bgc_N_out, tr_bgc_DON_out, tr_bgc_C_out, tr_bgc_chl_out, &
            tr_bgc_Am_out, tr_bgc_Sil_out, tr_bgc_DMS_out, tr_bgc_Fe_out, tr_bgc_hum_out, &
@@ -286,6 +312,7 @@
              tr_pond_out      , & ! if .true., use melt pond tracer
              tr_pond_lvl_out  , & ! if .true., use level-ice pond tracer
              tr_pond_topo_out , & ! if .true., use explicit topography-based ponds
+             tr_pond_sealvl_out,& ! if .true., use sealvl pond parameterization
              tr_snow_out      , & ! if .true., use snow redistribution or metamorphosis tracers
              tr_fsd_out       , & ! if .true., use floe size distribution
              tr_iso_out       , & ! if .true., use isotope tracers
@@ -314,6 +341,7 @@
         if (present(tr_pond_out)) tr_pond_out = tr_pond
         if (present(tr_pond_lvl_out) ) tr_pond_lvl_out  = tr_pond_lvl
         if (present(tr_pond_topo_out)) tr_pond_topo_out = tr_pond_topo
+        if (present(tr_pond_sealvl_out)) tr_pond_sealvl_out = tr_pond_sealvl
         if (present(tr_snow_out)   ) tr_snow_out    = tr_snow
         if (present(tr_fsd_out)    ) tr_fsd_out     = tr_fsd
         if (present(tr_iso_out)    ) tr_iso_out     = tr_iso
@@ -353,6 +381,7 @@
         write(iounit,*) "  tr_pond = ",tr_pond
         write(iounit,*) "  tr_pond_lvl  = ",tr_pond_lvl
         write(iounit,*) "  tr_pond_topo = ",tr_pond_topo
+        write(iounit,*) "  tr_pond_sealvl = ",tr_pond_sealvl
         write(iounit,*) "  tr_snow    = ",tr_snow
         write(iounit,*) "  tr_fsd     = ",tr_fsd
         write(iounit,*) "  tr_iso     = ",tr_iso
@@ -391,7 +420,7 @@
            nlt_bgc_DOC_in, nlt_bgc_DON_in, nlt_bgc_DIC_in, nlt_bgc_Fed_in, &
            nlt_bgc_Fep_in, nlt_bgc_Nit_in, nlt_bgc_Am_in, nlt_bgc_Sil_in, &
            nlt_bgc_DMSPp_in, nlt_bgc_DMSPd_in, nlt_bgc_DMS_in, nlt_bgc_hum_in, &
-           nlt_bgc_PON_in, nt_zbgc_frac_in, nt_bgc_S_in, nlt_chl_sw_in, &
+           nlt_bgc_PON_in, nt_zbgc_frac_in, nlt_chl_sw_in, &
            nlt_zaero_sw_in, &
            bio_index_o_in, bio_index_in)
 
@@ -433,7 +462,6 @@
              nlt_bgc_hum_in,& !
              nlt_bgc_PON_in,& ! zooplankton and detritus
              nt_zbgc_frac_in,&! fraction of tracer in the mobile phase
-             nt_bgc_S_in,   & ! (deprecated, was related to zsalinity)
              nlt_chl_sw_in    ! points to total chla in trcrn_sw
 
         integer (kind=int_kind), dimension(:), intent(in), optional :: &
@@ -515,7 +543,6 @@
         if (present(nlt_bgc_PON_in)  ) nlt_bgc_PON   = nlt_bgc_PON_in
         if (present(nlt_chl_sw_in)   ) nlt_chl_sw    = nlt_chl_sw_in
         if (present(nt_zbgc_frac_in) ) nt_zbgc_frac  = nt_zbgc_frac_in
-        if (present(nt_bgc_S_in)     ) nt_bgc_S      = nt_bgc_S_in
 
         if (present(bio_index_in)) then
            nsiz = size(bio_index_in)
@@ -753,7 +780,7 @@
            nlt_bgc_DOC_out, nlt_bgc_DON_out, nlt_bgc_DIC_out, nlt_bgc_Fed_out, &
            nlt_bgc_Fep_out, nlt_bgc_Nit_out, nlt_bgc_Am_out, nlt_bgc_Sil_out, &
            nlt_bgc_DMSPp_out, nlt_bgc_DMSPd_out, nlt_bgc_DMS_out, nlt_bgc_hum_out, &
-           nlt_bgc_PON_out, nt_zbgc_frac_out, nt_bgc_S_out, nlt_chl_sw_out, &
+           nlt_bgc_PON_out, nt_zbgc_frac_out, nlt_chl_sw_out, &
            nlt_zaero_sw_out, &
            bio_index_o_out, bio_index_out)
 
@@ -795,7 +822,6 @@
              nlt_bgc_hum_out,& !
              nlt_bgc_PON_out,& ! zooplankton and detritus
              nt_zbgc_frac_out,&! fraction of tracer in the mobile phase
-             nt_bgc_S_out,   & ! (deprecated, was related to zsalinity)
              nlt_chl_sw_out    ! points to total chla in trcrn_sw
 
         integer (kind=int_kind), dimension(:), intent(out), optional :: &
@@ -875,7 +901,6 @@
         if (present(nlt_bgc_PON_out)  ) nlt_bgc_PON_out   = nlt_bgc_PON
         if (present(nlt_chl_sw_out)   ) nlt_chl_sw_out    = nlt_chl_sw
         if (present(nt_zbgc_frac_out) ) nt_zbgc_frac_out  = nt_zbgc_frac
-        if (present(nt_bgc_S_out)     ) nt_bgc_S_out      = nt_bgc_S
 
         if (present(bio_index_o_out) ) bio_index_o_out  = bio_index_o
         if (present(bio_index_out)   ) bio_index_out    = bio_index
@@ -954,7 +979,6 @@
         write(iounit,*) "  nlt_bgc_PON   = ",nlt_bgc_PON
         write(iounit,*) "  nlt_chl_sw    = ",nlt_chl_sw
         write(iounit,*) "  nt_zbgc_frac  = ",nt_zbgc_frac
-        write(iounit,*) "  nt_bgc_S      = ",nt_bgc_S," (deprecated)"
 
         write(iounit,*) "  max_nbtrcr = ",max_nbtrcr
         do k = 1, max_nbtrcr

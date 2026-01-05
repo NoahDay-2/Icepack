@@ -32,9 +32,10 @@
       use icepack_tracers,    only: ncat, nilyr, nslyr, nblyr, ntrcr, nbtrcr, n_aero
       use icepack_tracers,    only: nt_Tsfc, nt_qice, nt_qsno, nt_aero, nt_isosno, nt_isoice
       use icepack_tracers,    only: nt_apnd, nt_hpnd, nt_fbri, tr_brine, bio_index
+      use icepack_tracers,    only: tr_pond, tr_pond_lvl, nt_alvl
       use icepack_tracers,    only: n_iso, tr_iso, nt_smice, nt_rsnw, nt_rhos, nt_sice
       use icepack_tracers,    only: icepack_compute_tracers
-      use icepack_parameters, only: skl_bgc, z_tracers, hi_min
+      use icepack_parameters, only: skl_bgc, z_tracers, hi_min, itd_area_min, itd_mass_min
       use icepack_parameters, only: kcatbound, kitd, saltflux_option, snwgrain, snwredist
       use icepack_therm_shared, only: Tmin
       use icepack_warnings,   only: warnstr, icepack_warnings_add
@@ -295,27 +296,35 @@
 
       subroutine reduce_area (hin_max,            &
                               aicen,     vicen,   &
-                              aicen_init,vicen_init)
+                              aicen_init,vicen_init, &
+                              dpnd_melt, trcrn)
 
       real (kind=dbl_kind), intent(in) :: &
          hin_max       ! lowest category boundary
 
       real (kind=dbl_kind), intent(inout) :: &
          aicen     , & ! concentration of ice
-         vicen         ! volume per unit area of ice          (m)
+         vicen     , & ! volume per unit area of ice          (m)
+         dpnd_melt     ! pond 'drainage' due to ice melting (m / step)
 
       real (kind=dbl_kind), intent(in) :: &
          aicen_init, & ! old ice area for category 1 (m)
          vicen_init    ! old ice volume for category 1 (m)
+
+      real (kind=dbl_kind), dimension (:,:), intent(in) :: &
+         trcrn     ! ice tracers
 
       ! local variables
 
       real (kind=dbl_kind) :: &
          hi0       , & ! initial hi
          hi1       , & ! current hi
-         dhi           ! hi1 - hi0
+         dhi       , & ! hi1 - hi0
+         da            ! total change in area complete within this subroutine
 
       character(len=*),parameter :: subname='(reduce_area)'
+
+            da = aicen ! store value of aicen at start of the subroutine
 
             hi0 = c0
             if (aicen_init > c0) &
@@ -336,6 +345,15 @@
                if (dhi < c0) then
                   hi1  = vicen / aicen
                   aicen = c2 * vicen / (hi1 + hi0)
+               endif
+            endif
+
+            da = da - aicen ! -1*change in fractional area over the subroutine
+            if (tr_pond) then
+               if (tr_pond_lvl) then
+                  dpnd_melt = da*trcrn(nt_apnd,1)*trcrn(nt_hpnd,1)*trcrn(nt_alvl,1)
+               else
+                  dpnd_melt = da*trcrn(nt_apnd,1)*trcrn(nt_hpnd,1)
                endif
             endif
 
@@ -416,7 +434,6 @@
         worka, workb
 
       real (kind=dbl_kind), dimension(ncat) :: aicen_init
-      real (kind=dbl_kind), dimension(ncat) :: vicen_init
       real (kind=dbl_kind), dimension(ncat) :: vsnon_init
 
       character(len=*),parameter :: subname='(shift_ice)'
@@ -426,7 +443,6 @@
       !-----------------------------------------------------------------
 
       aicen_init(:) = aicen(:)
-      vicen_init(:) = vicen(:)
       vsnon_init(:) = vsnon(:)
 
       !-----------------------------------------------------------------
@@ -1058,12 +1074,32 @@
          n, k, it, & !counting indices
          blevels
 
+      logical (kind=log_kind) :: &
+         zap_residual, &
+         zap_category(ncat)
+
       real (kind=dbl_kind) :: xtmp, sicen      ! temporary variables
       real (kind=dbl_kind) :: dvssl, dvint     ! temporary variables
       real (kind=dbl_kind) , dimension (1):: trcr_skl
       real (kind=dbl_kind) , dimension (nblyr+1):: bvol
 
       character(len=*),parameter :: subname='(zap_small_areas)'
+
+      !-----------------------------------------------------------------
+      ! Flag categories with very small areas and residual ice
+      !-----------------------------------------------------------------
+
+      zap_category(:) = .false.
+      do n = 1, ncat
+         if ( abs(aicen(n)) <= puny .and. &
+             (abs(aicen(n)) /= c0 .or. abs(vicen(n)) /= c0 .or. abs(vsnon(n)) /= c0)) then
+            zap_category(n) = .true.
+         endif
+      enddo
+
+      zap_residual = .false.
+      if (aice      < max(itd_area_min, puny) .or. &
+          aice*rhoi < max(itd_mass_min, puny)) zap_residual = .true. ! all categories
 
       !-----------------------------------------------------------------
       ! I. Zap categories with very small areas.
@@ -1079,8 +1115,7 @@
             call icepack_warnings_setabort(.true.,__FILE__,__LINE__)
             call icepack_warnings_add(subname//' Zap ice: negative ice area')
             return
-         elseif (abs(aicen(n)) /= c0 .and. &
-                 abs(aicen(n)) <= puny) then
+         elseif (zap_category(n) .or. zap_residual) then
 
       !-----------------------------------------------------------------
       ! Account for tracers important for conservation

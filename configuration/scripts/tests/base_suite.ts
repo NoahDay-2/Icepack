@@ -25,9 +25,11 @@ smoke          col     1x1        debug,run1year,dyn,fluxopenw
 smoke          col     1x1        debug,run1year,debug,snicartest
 smoke          col     1x1        debug,run1year,debug,snicar
 smoke          col     1x1        debug,run1year,debug,congel
+smoke          col     1x1        debug,ionetcdf,atmmosaic,ocnmosaic
 restart        col     1x1        debug
 restart        col     1x1        diag1
 restart        col     1x1        pondlvl
+restart        col     1x1        pondsealvl
 restart        col     1x1        pondtopo
 restart        col     1x1        bgcispol
 restart        col     1x1        bgcnice

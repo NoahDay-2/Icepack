@@ -394,8 +394,7 @@
                                bio_index,                &
                                aicen,                    &
                                vicen,        vsnon,      &
-                               iphin,                    &! ntrcr
-                               trcrn,        aice_old,   &!aice_old
+                               iphin,        trcrn,      &
                                flux_bion,    flux_bio,   &
                                upNOn,        upNHn,      &
                                upNO,         upNH,       &
@@ -1860,13 +1859,10 @@
           U_Nit(k) = U_Nit_f(k)*U_Nit_tot
           U_Sil(k) = U_Sil_f(k)*U_Sil_tot
           U_Fe(k)  = U_Fe_f(k)*U_Fe_tot
-
-          if (n_fed == 0) then
-             if (R_Si2N(k) > c0) then
-                grow_N(k) = min(U_Sil(k)/R_Si2N(k),U_Nit(k) + U_Am(k), U_Fe(k)/R_Fe2N(k))
-             else
-                grow_N(k) = min(U_Nit(k) + U_Am(k),U_Fe(k)/R_Fe2N(k))
-             endif
+          if (R_Si2N(k) > c0) then
+             grow_N(k) = min(U_Sil(k)/R_Si2N(k),U_Nit(k) + U_Am(k), U_Fe(k)/R_Fe2N(k))
+          else
+             grow_N(k) = min(U_Nit(k) + U_Am(k),U_Fe(k)/R_Fe2N(k))
           endif
 
           fr_Am(k) = c0

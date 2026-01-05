@@ -6,11 +6,12 @@
   use icepack_parameters, only: c0, c1, c2, c8, c10
   use icepack_parameters, only: p01, p05, p1, p2, p5, pi, bignum, puny
   use icepack_parameters, only: viscosity_dyn, rhow, rhoi, rhos, cp_ocn, cp_ice, Lfresh, gravit, rhofresh
-  use icepack_parameters, only: hs_min, snwgrain
+  use icepack_parameters, only: hs_min, snwgrain, semi_implicit_Tsfc
   use icepack_parameters, only: a_rapid_mode, Rac_rapid_mode, tscale_pnd_drain
   use icepack_parameters, only: aspect_rapid_mode, dSdt_slow_mode, phi_c_slow_mode
   use icepack_parameters, only: sw_redist, sw_frac, sw_dtemp
-  use icepack_tracers, only: nilyr, nslyr, tr_pond
+  use icepack_parameters, only: pndmacr
+  use icepack_tracers, only: nilyr, nslyr, tr_pond, tr_pond_sealvl
   use icepack_mushy_physics, only: icepack_mushy_density_brine, enthalpy_brine, icepack_enthalpy_snow
   use icepack_mushy_physics, only: enthalpy_mush_liquid_fraction
   use icepack_mushy_physics, only: icepack_mushy_temperature_mush, icepack_mushy_liquid_fraction
@@ -19,6 +20,9 @@
   use icepack_mushy_physics, only: conductivity_mush_array, conductivity_snow_array
   use icepack_therm_shared, only: surface_heat_flux, dsurface_heat_flux_dTsf
   use icepack_therm_shared, only: ferrmax
+  use icepack_meltpond_sealvl, only: pond_hypsometry, pond_height
+  use icepack_therm_shared, only: fsurf_cpl, flat_cpl, dfsurfdTs_cpl, dflatdTs_cpl
+  use icepack_therm_shared, only: fsurf_cpl0, flat_cpl0
   use icepack_warnings, only: warnstr, icepack_warnings_add
   use icepack_warnings, only: icepack_warnings_setabort, icepack_warnings_aborted
 
@@ -56,7 +60,9 @@
                                           flwoutn,  fsurfn,   &
                                           fcondtop, fcondbot, &
                                           fadvheat, snoice,   &
-                                          smice,    smliq)
+                                          smice,    smliq,    &
+                                          dpnd_flush,         &
+                                          dpnd_expon)
 
     ! solve the enthalpy and bulk salinity of the ice for a single column
 
@@ -110,6 +116,10 @@
          zSin        , & ! internal ice layer salinities
          zqsn        , & ! snow layer enthalpy (J m-3)
          zTsn            ! internal snow layer temperatures
+
+     real (kind=dbl_kind), intent(inout):: &
+         dpnd_flush  , & ! pond flushing rate due to ice permeability (m/s)
+         dpnd_expon      ! exponential pond drainage rate (m/s)
 
     ! local variables
     real(kind=dbl_kind), dimension(1:nilyr) :: &
@@ -328,7 +338,8 @@
     endif
 
     ! drain ponds from flushing
-    call flush_pond(w, hpond, apond, dt)
+    call flush_pond(w, hpond, apond, dt, dpnd_flush, dpnd_expon, &
+                    zTin, phi, hilyr, hin, hsn)
     if (icepack_warnings_aborted(subname)) return
 
     ! flood snow ice
@@ -841,6 +852,11 @@
     else
        ! initially melting
 
+       if (semi_implicit_Tsfc) then  ! update surf/lat hf based on dT
+          fsurf_cpl = fsurf_cpl + dfsurfdTs_cpl * (Tmlt - Tsf)
+          flat_cpl  = flat_cpl  + dflatdTs_cpl  * (Tmlt - Tsf)
+       endif
+
        ! solve the system for melt and no snow
        Tsf = Tmlt
 
@@ -884,6 +900,11 @@
           ! assume surface is cold
           fcondtop1 = fcondtop
           fsurfn1   = fsurfn
+
+          if (semi_implicit_Tsfc) then  ! initialize
+             fsurf_cpl = fsurf_cpl0
+             flat_cpl  = flat_cpl0
+          endif
 
           ! reset the solution to initial values
           Tsf  = Tsf0
@@ -1226,24 +1247,36 @@
     zTsn_prev = zTsn
     zTin_prev = zTin
 
+    if (semi_implicit_Tsfc) then  ! surf/lat hf from coupler, d(surf/lat)/dT computed
+       dfsurfn_dTsf  = dfsurfdTs_cpl
+       dflatn_dTsf   = dflatdTs_cpl
+       fsurfn        = fsurf_cpl
+       flatn         = flat_cpl
+       fsurfn        = fsurfn + fswsfc
+       flwoutn       = c0 !prevent compiler warning
+       fsensn        = c0 !prevent compiler warning
+    endif
+
     ! picard iteration
     picard: do nit = 1, nit_max
 
-       ! surface heat flux
-       call surface_heat_flux(Tsf,     fswsfc, &
-                              rhoa,    flw,    &
-                              potT,    Qa,     &
-                              shcoef,  lhcoef, &
-                              flwoutn, fsensn, &
-                              flatn,   fsurfn)
-       if (icepack_warnings_aborted(subname)) return
+       if (.not.semi_implicit_Tsfc) then  ! no surface heat flux calculation
+          ! surface heat flux
+          call surface_heat_flux(Tsf,     fswsfc, &
+                                 rhoa,    flw,    &
+                                 potT,    Qa,     &
+                                 shcoef,  lhcoef, &
+                                 flwoutn, fsensn, &
+                                 flatn,   fsurfn)
+          if (icepack_warnings_aborted(subname)) return
 
-       ! derivative of heat flux with respect to surface temperature
-       call dsurface_heat_flux_dTsf(Tsf,          rhoa,          &
-                                    shcoef,       lhcoef,        &
-                                    dfsurfn_dTsf, dflwoutn_dTsf, &
-                                    dfsensn_dTsf, dflatn_dTsf)
-       if (icepack_warnings_aborted(subname)) return
+          ! derivative of heat flux with respect to surface temperature
+          call dsurface_heat_flux_dTsf(Tsf,          rhoa,          &
+                                       shcoef,       lhcoef,        &
+                                       dfsurfn_dTsf, dflwoutn_dTsf, &
+                                       dfsensn_dTsf, dflatn_dTsf)
+          if (icepack_warnings_aborted(subname)) return
+       endif
 
        ! tridiagonal solve of new temperatures
        call solve_heat_conduction(lsnow,     lcold,        &
@@ -1289,6 +1322,11 @@
                                      fadvheat_nit)
        if (icepack_warnings_aborted(subname)) return
 
+       if (semi_implicit_Tsfc) then  ! update surf/lat hf based on dT
+          fsurfn = fsurfn + (Tsf - Tsf_prev)*dfsurfn_dTsf
+          flatn  = flatn  + (Tsf - Tsf_prev)*dflatn_dTsf
+       endif
+
        if (lconverged) exit
 
        Tsf_prev  = Tsf
@@ -1312,13 +1350,15 @@
     if (icepack_warnings_aborted(subname)) return
 
     ! final surface heat flux
-    call surface_heat_flux(Tsf,     fswsfc, &
-                           rhoa,    flw,    &
-                           potT,    Qa,     &
-                           shcoef,  lhcoef, &
-                           flwoutn, fsensn, &
-                           flatn,   fsurfn)
-    if (icepack_warnings_aborted(subname)) return
+    if (.not.semi_implicit_Tsfc) then  ! no surface heat flux calculation
+       call surface_heat_flux(Tsf,     fswsfc, &
+                              rhoa,    flw,    &
+                              potT,    Qa,     &
+                              shcoef,  lhcoef, &
+                              flwoutn, fsensn, &
+                              flatn,   fsurfn)
+       if (icepack_warnings_aborted(subname)) return
+    endif
 
     ! if not converged
     if (.not. lconverged) then
@@ -3121,12 +3161,12 @@
           !phi = icepack_mushy_liquid_fraction(zTin(k), zSin(k))
           phi_min = min(phi_min,phi(k))
 
+          ice_mass = ice_mass + phi(k) * &
+           icepack_mushy_density_brine( &
+            liquidus_brine_salinity_mush(zTin(k))) + (c1 - phi(k))*rhoi
+
           ! permeability
           perm = permeability(phi(k))
-
-          ! ice mass
-          ice_mass = ice_mass + phi(k)        * icepack_mushy_density_brine(liquidus_brine_salinity_mush(zTin(k))) + &
-               (c1 - phi(k)) * rhoi
 
           ! permeability harmonic mean
           perm_harm = perm_harm + c1 / (perm + 1e-30_dbl_kind)
@@ -3141,7 +3181,12 @@
        hocn = (ice_mass + hpond * apond * rhofresh + hsn * rhos) / rhow
 
        ! calculate brine height above bottom of ice
-       hbrine = hin + hpond
+       if (tr_pond_sealvl) then
+          call pond_height(apond, hpond, hin, hbrine)
+          if (icepack_warnings_aborted(subname)) return
+       else
+          hbrine = hin + hpond
+       endif
 
        ! pressure head
        dhhead = max(hbrine - hocn,c0)
@@ -3172,17 +3217,34 @@
 
 !=======================================================================
 
-  subroutine flush_pond(w, hpond, apond, dt)
+  subroutine flush_pond(w, hpond, apond, dt, dpnd_flush, dpnd_expon, &
+                        zTin, phi, hilyr, hin, hsn)
 
     ! given a flushing velocity drain the meltponds
 
     real(kind=dbl_kind), intent(in) :: &
          w     , & ! vertical flushing Darcy flow rate (m s-1)
-         apond , & ! melt pond area fraction of category (-)
-         dt        ! time step (s)
+         dt    , & ! time step (s)
+         hilyr , & ! ice layer thickness (m)
+         hin   , & ! ice thickness (m)
+         hsn       ! snow thickness (m)
+
+    real(kind=dbl_kind), dimension(:), intent(in) :: &
+         zTin      , & ! ice layer temperature (C)
+         phi           ! ice layer liquid fraction
 
     real(kind=dbl_kind), intent(inout) :: &
-         hpond     ! melt pond thickness (m)
+         hpond     , & ! melt pond thickness (m)
+         apond     , & ! melt pond area fraction of category (-)
+         dpnd_flush, & ! pond flushing rate due to ice permeability (m/s)
+         dpnd_expon    ! exponential pond drainage rate (m/s)
+
+    real(kind=dbl_kind) :: &
+         dhpond   , & ! change in pond depth per unit pond area (m)
+         ice_mass , & ! mass of ice (kg m-2)
+         hocn     , & ! height of ocean above mean base of ice (m)
+         hpsurf   , & ! height of the pond surface above mean base of ice (m)
+         head         ! height of pond surface above sea level (m)
 
     real(kind=dbl_kind), parameter :: &
          hpond0 = 0.01_dbl_kind
@@ -3194,18 +3256,58 @@
 
     if (tr_pond) then
        if (apond > c0 .and. hpond > c0) then
-
-          ! flush pond through mush
-          hpond = hpond - w * dt / apond
-
+          !-------------------------------------------------------------
+          ! flush pond through mush (percolation drainage)
+          !-------------------------------------------------------------
+          dhpond = max(-w * dt / apond, -hpond)
+          dpnd_flush = -dhpond * apond
+          ! update pond depth (and area)
+          if (tr_pond_sealvl) then
+               call pond_hypsometry(hpond, apond, dhpond=dhpond, hin=hin)
+               if (icepack_warnings_aborted(subname)) return
+          else
+               hpond = hpond - w * dt / apond
+          endif
           hpond = max(hpond, c0)
 
-          ! exponential decay of pond
-          lambda_pond = c1 / (tscale_pnd_drain * 24.0_dbl_kind * 3600.0_dbl_kind)
-          hpond = hpond - lambda_pond * dt * (hpond + hpond0)
-
+          !-------------------------------------------------------------
+          ! exponential decay of pond (macro-flaw drainage)
+          !-------------------------------------------------------------
+          lambda_pond = c1 / (tscale_pnd_drain*24.0_dbl_kind &
+            *3600.0_dbl_kind)
+          if (trim(pndmacr) == 'lambda') then
+               dhpond = max(-lambda_pond*dt*(hpond + hpond0),-hpond)
+          elseif (trim(pndmacr) == 'head') then
+               ! Calling calc_ice_mass here is not bit-for-bit due to optimization, so left inline for now.
+               ! This will be updated in the future.
+               call calc_ice_mass(phi, zTin, hilyr, ice_mass)
+               if (icepack_warnings_aborted(subname)) return
+               hocn = (ice_mass + hpond*apond*rhofresh + hsn*rhos)/rhow
+               call pond_height(apond, hpond, hin, hpsurf)
+               if (icepack_warnings_aborted(subname)) return
+               head = hpsurf - hocn
+               dhpond = max(min(c0, -lambda_pond*dt*head), -hpond)
+          else
+               call icepack_warnings_add(subname//" unsupported pndmacr option" )
+               call icepack_warnings_setabort(.true.,__FILE__,__LINE__)
+               if (icepack_warnings_aborted(subname)) return
+          endif
+          ! diagnostic drainage rate
+          dpnd_expon = -dhpond * apond
+          ! update pond depth (and area)
+          if (tr_pond_sealvl) then
+               call pond_hypsometry(hpond, apond, dhpond=dhpond, hin=hin)
+               if (icepack_warnings_aborted(subname)) return
+          else
+               if (trim(pndmacr) == 'lambda') then
+                  hpond = hpond - lambda_pond * dt * (hpond + hpond0)
+               else
+                  call icepack_warnings_add(subname//" currently only pondmacr='lambda' supported for not sealvlponds" )
+                  call icepack_warnings_setabort(.true.,__FILE__,__LINE__)
+                  if (icepack_warnings_aborted(subname)) return
+               endif
+          endif
           hpond = max(hpond, c0)
-
        endif
     endif
 
@@ -3573,6 +3675,41 @@
     trc = trc2
 
   end subroutine update_vertical_tracers_ice
+
+!=======================================================================
+! Ice Mass
+!=======================================================================
+
+  subroutine calc_ice_mass(phi, zTin, hilyr, ice_mass)
+
+     ! Calculate the mass of the ice per unit category area
+     real(kind=dbl_kind), dimension(:), intent(in) :: &
+          zTin      , & ! ice layer temperature (C)
+          phi           ! ice layer liquid fraction
+
+     real(kind=dbl_kind), intent(in) :: &
+          hilyr         ! ice layer thickness (m)
+
+     real(kind=dbl_kind), intent(out) :: &
+          ice_mass      ! mass per unit category area (kg m-2)
+
+     ! local variables
+     integer(kind=int_kind) :: &
+          k             ! ice layer index
+
+     character(len=*),parameter :: subname='(calc_ice_mass)'
+
+     ice_mass = c0
+
+     do k = 1, nilyr
+          ice_mass = ice_mass + phi(k) * &
+           icepack_mushy_density_brine( &
+            liquidus_brine_salinity_mush(zTin(k))) + (c1 - phi(k))*rhoi
+     enddo
+
+     ice_mass = ice_mass * hilyr
+
+end subroutine calc_ice_mass
 
 !=======================================================================
 

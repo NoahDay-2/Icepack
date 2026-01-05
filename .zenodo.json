@@ -1,19 +1,21 @@
 {
-    "license": "other-open", 
-    "description": "No description provided", 
+    "license": "BSD-3-Clause",
+    "copyright": "Copyright 1998-2025 Triad National Security, LLC",
+    "description": "View detailed release notes at https://github.com/CICE-Consortium/Icepack/releases", 
     "language": "eng", 
-    "title": "CICE-Consortium/Icepack: Icepack m.n.p", 
+    "title": "CICE-Consortium/Icepack: Icepack 1.5.2", 
     "keywords": [
-        "sea ice model, Icepack"
+        "sea ice model",
+        "Icepack"
     ], 
-    "version": "m.n.p", 
+    "version": "1.5.2", 
     "upload_type": "software", 
     "communities": [
         {
             "identifier": "cice-consortium"
         }
     ], 
-    "publication_date": "2019-06-20", 
+    "publication_date": "2025-08-15", 
     "creators": [
         {
             "affiliation": "Los Alamos National Laboratory", 
@@ -30,6 +32,10 @@
         {
             "affiliation": "Environment and Climate Change Canada", 
             "name": "Philippe Blain"
+        }, 
+        {
+            "affiliation": "National Center for Atmospheric Research", 
+            "name": "David Clemens-Sewall"
         }, 
         {
             "affiliation": "National Oceanic and Atmospheric Administration", 
@@ -76,8 +82,16 @@
             "name": "Mads Ribergaard"
         }, 
         {
+            "affiliation": "Alfred-Wegener-Institut Helmholz-Zentrum fur Polar- und Meersforschung", 
+            "name": "Lettie Roach"
+        }, 
+        {
             "affiliation": "Los Alamos National Laboratory", 
             "name": "Andrew Roberts"
+        }, 
+        {
+            "affiliation": "Australian Earth-System Simulator", 
+            "name": "Anton Steketee"
         }, 
         {
             "affiliation": "Los Alamos National Laboratory", 
@@ -86,9 +100,14 @@
         {
             "affiliation": "Geophysical Fluid Dynamics Laboratory", 
             "name": "Michael Winton"
+        },
+        {
+            "affiliation": "National Aeronautics and Space Administration", 
+            "name": "Bin Zhao"
         }
     ], 
     "access_right": "open", 
+    "repository_url": "https://github.com/CICE-Consortium/Icepack", 
     "related_identifiers": [
         {
             "identifier": "https://github.com/CICE-Consortium/Icepack/tree/Icepack1.0.0", 

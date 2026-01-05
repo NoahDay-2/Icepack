@@ -12,7 +12,7 @@
       use icepack_parameters, only: c1, emissivity, snwgrain
       use icepack_warnings, only: warnstr, icepack_warnings_add
       use icepack_warnings, only: icepack_warnings_setabort, icepack_warnings_aborted
-      use icepack_tracers, only: tr_iso
+      use icepack_tracers, only: tr_iso, tr_pond
 
       implicit none
       private
@@ -43,6 +43,8 @@
                                fhocnn,   fswthrun,   &
                                fswthrun_vdr, fswthrun_vdf,&
                                fswthrun_idr, fswthrun_idf,&
+                               fswthrun_uvrdr, fswthrun_uvrdf,&
+                               fswthrun_pardr, fswthrun_pardf,&
                                strairxT, strairyT,   &
                                Cdn_atm_ratio,        &
                                fsurf,    fcondtop,   &
@@ -56,6 +58,8 @@
                                fhocn,    fswthru,    &
                                fswthru_vdr, fswthru_vdf,&
                                fswthru_idr, fswthru_idf,&
+                               fswthru_uvrdr, fswthru_uvrdf,&
+                               fswthru_pardr, fswthru_pardf,&
                                melttn, meltsn, meltbn, congeln, snoicen, &
                                meltt,  melts,        &
                                meltb,  dsnow, dsnown,&
@@ -64,12 +68,18 @@
                                Uref,     Urefn,      &
                                Qref_iso, Qrefn_iso,  &
                                fiso_ocn, fiso_ocnn,  &
-                               fiso_evap, fiso_evapn)
+                               fiso_evap, fiso_evapn,&
+                               dpnd_flush,   dpnd_flushn,   &
+                               dpnd_expon,   dpnd_exponn,   &
+                               dpnd_freebd,  dpnd_freebdn,  &
+                               dpnd_initial, dpnd_initialn, &
+                               dpnd_dlid,    dpnd_dlidn)
 
-      ! single category fluxes
+      ! concentration is aicen_init in call to subroutine
       real (kind=dbl_kind), intent(in) :: &
           aicen       ! concentration of ice
 
+      ! single category fluxes
       real (kind=dbl_kind), optional, intent(in) :: &
           flw     , & ! downward longwave flux          (W/m**2)
           strairxn, & ! air/ice zonal  strss,           (N/m**2)
@@ -98,10 +108,19 @@
           dsnown  , & ! change in snow depth            (m)
           congeln , & ! congelation ice growth          (m)
           snoicen , & ! snow-ice growth                 (m)
+          dpnd_flushn , & ! pond flushing rate due to ice permeability (m/step)
+          dpnd_exponn , & ! exponential pond drainage rate (m/step)
+          dpnd_freebdn, & ! pond drainage rate due to freeboard constraint (m/step)
+          dpnd_initialn,& ! runoff rate due to rfrac (m/step)
+          dpnd_dlidn  , & ! pond loss/gain due to ice lid (m/step)
           fswthrun_vdr, & ! vis dir sw radiation through ice bot    (W/m**2)
           fswthrun_vdf, & ! vis dif sw radiation through ice bot    (W/m**2)
           fswthrun_idr, & ! nir dir sw radiation through ice bot    (W/m**2)
           fswthrun_idf, & ! nir dif sw radiation through ice bot    (W/m**2)
+          fswthrun_uvrdr, & !   > 700nm vis uvr dir sw radiation through ice bot (W/m**2)
+          fswthrun_uvrdf, & !   > 700nm vis uvr dif sw radiation through ice bot (W/m**2)
+          fswthrun_pardr, & ! 400-700nm vis par dir sw radiation through ice bot (W/m**2)
+          fswthrun_pardf, & ! 400-700nm vis par dif sw radiation through ice bot (W/m**2)
           Urefn       ! air speed reference level       (m/s)
 
       ! cumulative fluxes
@@ -131,10 +150,19 @@
           meltsliq, & ! mass of snow melt               (kg/m^2)
           congel  , & ! congelation ice growth          (m)
           snoice  , & ! snow-ice growth                 (m)
+          dpnd_flush , & ! pond flushing rate due to ice permeability (m/step)
+          dpnd_expon , & ! exponential pond drainage rate (m/step)
+          dpnd_freebd, & ! pond drainage rate due to freeboard constraint (m/step)
+          dpnd_initial,& ! runoff rate due to rfrac (m/step)
+          dpnd_dlid  , & ! pond loss/gain (+/-) to ice lid freezing/melting (m/step)
           fswthru_vdr, & ! vis dir sw radiation through ice bot    (W/m**2)
           fswthru_vdf, & ! vis dif sw radiation through ice bot    (W/m**2)
           fswthru_idr, & ! nir dir sw radiation through ice bot    (W/m**2)
           fswthru_idf, & ! nir dif sw radiation through ice bot    (W/m**2)
+          fswthru_uvrdr, & !   > 700nm vis uvr dir sw radiation through ice bot (W/m**2)
+          fswthru_uvrdf, & !   > 700nm vis uvr dif sw radiation through ice bot (W/m**2)
+          fswthru_pardr, & ! 400-700nm vis par dir sw radiation through ice bot (W/m**2)
+          fswthru_pardf, & ! 400-700nm vis par dif sw radiation through ice bot (W/m**2)
           dsnow,    & ! change in snow depth            (m)
           Uref        ! air speed reference level       (m/s)
 
@@ -228,6 +256,15 @@
       if (present(fswthrun_idf) .and. present(fswthru_idf)) &
          fswthru_idf = fswthru_idf + fswthrun_idf  * aicen
 
+      if (present(fswthrun_uvrdr) .and. present(fswthru_uvrdr)) &
+         fswthru_uvrdr   = fswthru_uvrdr   + fswthrun_uvrdr  * aicen
+      if (present(fswthrun_uvrdf) .and. present(fswthru_uvrdf)) &
+         fswthru_uvrdf   = fswthru_uvrdf   + fswthrun_uvrdf  * aicen
+      if (present(fswthrun_pardr) .and. present(fswthru_pardr)) &
+         fswthru_pardr   = fswthru_pardr   + fswthrun_pardr  * aicen
+      if (present(fswthrun_pardf) .and. present(fswthru_pardf)) &
+         fswthru_pardf   = fswthru_pardf   + fswthrun_pardf  * aicen
+
       ! ice/snow thickness
 
       if (present(melttn) .and. present(meltt)) &
@@ -247,6 +284,19 @@
          congel    = congel    + congeln   * aicen
       if (present(snoicen) .and. present(snoice)) &
          snoice    = snoice    + snoicen   * aicen
+      ! Meltwater fluxes
+      if (tr_pond) then
+         if (present(dpnd_flushn)  .and. present(dpnd_flush))   &
+            dpnd_flush   = dpnd_flush   + dpnd_flushn   * aicen
+         if (present(dpnd_exponn)  .and. present(dpnd_expon))   &
+            dpnd_expon   = dpnd_expon   + dpnd_exponn   * aicen
+         if (present(dpnd_freebdn) .and. present(dpnd_freebd))  &
+            dpnd_freebd  = dpnd_freebd  + dpnd_freebdn  * aicen
+         if (present(dpnd_initialn).and. present(dpnd_initial)) &
+            dpnd_initial = dpnd_initial + dpnd_initialn * aicen
+         if (present(dpnd_dlidn)   .and. present(dpnd_dlid))    &
+            dpnd_dlid    = dpnd_dlid    + dpnd_dlidn    * aicen
+      endif
 
       end subroutine merge_fluxes
 

@@ -126,10 +126,8 @@
                                         ! phi_init, dSin0_frazil are for mushy thermo
          phi_init  = 0.75_dbl_kind    ,&! initial liquid fraction of frazil
          min_salin = p1               ,&! threshold for brine pocket treatment
-         salt_loss = 0.4_dbl_kind     ,&! fraction of salt retained in zsalinity
          Tliquidus_max = c0           ,&! maximum liquidus temperature of mush (C)
          dSin0_frazil = c3            ,&! bulk salinity reduction of newly formed frazil
-         dts_b     = 50._dbl_kind     ,&! zsalinity timestep
          ustar_min = 0.005_dbl_kind   ,&! minimum friction velocity for ocean heat flux (m/s)
          hi_min    = p01              ,&! minimum ice thickness allowed (m) for thermo
          ! mushy thermo
@@ -155,8 +153,9 @@
          calc_Tsfc     = .true. ,&! if true, calculate surface temperature
                                   ! if false, Tsfc is computed elsewhere and
                                   ! atmos-ice fluxes are provided to CICE
+         semi_implicit_Tsfc = .false.    ,&! surface temperature coupling option
+         vapor_flux_correction = .false. ,&! compute mass/enthalpy correction for evaporation/sublimation
          update_ocn_f = .false. ,&! include fresh water and salt fluxes for frazil
-         solve_zsal   = .false. ,&! if true, update salinity profile from solve_S_dt
          modal_aero   = .false. ,&! if true, use modal aerosal optical properties
                                   ! only for use with tr_aero or tr_zaero
          conserv_check = .false.  ! if true, do conservations checks and abort
@@ -236,6 +235,12 @@
       character (len=char_len), public :: &
          snw_ssp_table = 'test'   ! lookup table: 'snicar' or 'test'
 
+      ! Parameters for the impact of pond depth on shortwave
+      real (kind=dbl_kind), public :: &
+         hpmin  = 0.005_dbl_kind, & ! minimum allowed melt pond depth (m)
+         hp0    = 0.200_dbl_kind    ! pond depth below which transition to bare ice
+
+
 !-----------------------------------------------------------------------
 ! Parameters for dynamics, including ridging and strength
 !-----------------------------------------------------------------------
@@ -249,17 +254,19 @@
                             ! 1 for exponential redistribution function
 
       real (kind=dbl_kind), public :: &
-         Cf       = 17._dbl_kind     ,&! ratio of ridging work to PE change in ridging
-         Pstar    = 2.75e4_dbl_kind  ,&! constant in Hibler strength formula
-                                       ! (kstrength = 0)
-         Cstar    = 20._dbl_kind     ,&! constant in Hibler strength formula
-                                       ! (kstrength = 0)
-         dragio   = 0.00536_dbl_kind ,&! ice-ocn drag coefficient
+         itd_area_min = 1.e-11_dbl_kind     ,&! zap residual ice below a minimum area
+         itd_mass_min = 1.e-10_dbl_kind     ,&! zap residual ice below a minimum mass
+         Cf       = 17._dbl_kind            ,&! ratio of ridging work to PE change in ridging
+         Pstar    = 2.75e4_dbl_kind         ,&! constant in Hibler strength formula
+                                              ! (kstrength = 0)
+         Cstar    = 20._dbl_kind            ,&! constant in Hibler strength formula
+                                              ! (kstrength = 0)
+         dragio   = 0.00536_dbl_kind        ,&! ice-ocn drag coefficient
          thickness_ocn_layer1 = 2.0_dbl_kind,&! thickness of first ocean level (m)
-         iceruf_ocn = 0.03_dbl_kind  ,&! under-ice roughness (m)
-         gravit   = 9.80616_dbl_kind ,&! gravitational acceleration (m/s^2)
-         mu_rdg = 3.0_dbl_kind ! e-folding scale of ridged ice, krdg_partic=1 (m^0.5)
-                                       ! (krdg_redist = 1)
+         iceruf_ocn = 0.03_dbl_kind         ,&! under-ice roughness (m)
+         gravit   = 9.80616_dbl_kind        ,&! gravitational acceleration (m/s^2)
+         mu_rdg = 3.0_dbl_kind                ! e-folding scale of ridged ice, krdg_partic=1 (m^0.5)
+                                              ! (krdg_redist = 1)
 
       logical (kind=log_kind), public :: &
          calc_dragio     = .false.     ! if true, calculate dragio from iceruf_ocn and thickness_ocn_layer1
@@ -332,18 +339,27 @@
 !-----------------------------------------------------------------------
 
       real (kind=dbl_kind), public :: &
-         hs0       = 0.03_dbl_kind    ! snow depth for transition to bare sea ice (m)
-
-      ! level-ice ponds
-      character (len=char_len), public :: &
-         frzpnd    = 'cesm'           ! pond refreezing parameterization
+         hs0       = 0.03_dbl_kind, & ! snow depth for transition to bare sea ice (m)
+         hs1       = 0.03_dbl_kind    ! snow depth for transition to bare pond ice (m)
 
       real (kind=dbl_kind), public :: &
          dpscale   = 0.001_dbl_kind,& ! alter e-folding time scale for flushing (ktherm=1)
          rfracmin  = 0.15_dbl_kind, & ! minimum retained fraction of meltwater
          rfracmax  = 0.85_dbl_kind, & ! maximum retained fraction of meltwater
-         pndaspect = 0.8_dbl_kind, &  ! ratio of pond depth to area fraction
-         hs1       = 0.03_dbl_kind    ! snow depth for transition to bare pond ice (m)
+         pndaspect = 0.8_dbl_kind     ! ratio of pond depth to area fraction
+
+      character (len=char_len), public :: &
+         frzpnd    = 'cesm'           ! pond refreezing parameterization
+
+      ! sealvl ponds
+      real (kind=dbl_kind), public :: &
+         apnd_sl   = 0.27_dbl_kind    ! equilibrium pond fraction for sea level parameterization
+
+      character (len=char_len), public :: &
+         pndhyps   = 'sealevel' , &   ! pond hypsometry option
+         pndfrbd   = 'floor'    , &   ! over what domain to calculate freeboard constraint
+         pndhead   = 'perched'  , &   ! geometry for computing pond pressure head
+         pndmacr   = 'lambda'         ! driving force for macro-flaw pond drainage
 
       ! topo ponds
       real (kind=dbl_kind), public :: &
@@ -369,8 +385,14 @@
          rhosmax    =  450.0_dbl_kind, & ! maximum snow density (kg/m^3)
          windmin    =   10.0_dbl_kind, & ! minimum wind speed to compact snow (m/s)
          drhosdwind =   27.3_dbl_kind, & ! wind compaction factor for snow (kg s/m^4)
-         snwlvlfac  =    0.3_dbl_kind    ! fractional increase in snow
+         snwlvlfac  =    0.3_dbl_kind, & ! fractional increase in snow
                                          ! depth for bulk redistribution
+         snw_growth_wet = 4.22e5_dbl_kind, & ! wet metamorphism parameter (um^3/s)
+                                         ! 1.e18 * 4.22e-13 (Oleson 2010)
+         drsnw_min  =    0.0_dbl_kind, & ! minimum snow grain growth factor
+         snwliq_max =    0.033_dbl_kind  ! irreducible saturation fraction
+                                         ! 0.033 (Anderson 1976)
+                                         ! 0.09 to 0.1  (Denoth et al, 1979 & Brun 1989)
       ! indices for aging lookup table
       integer (kind=int_kind), public :: &
          isnw_T,    & ! maximum temperature index
@@ -410,9 +432,7 @@
          phi_snow     = -1.0_dbl_kind   , & ! snow porosity (compute from snow density if negative)
          grid_o       = 0.006_dbl_kind  , & ! for bottom flux
          initbio_frac = c1              , & ! fraction of ocean trcr concentration in bio trcrs
-         l_sk         = 2.0_dbl_kind    , & ! characteristic diffusive scale (m)
-         grid_oS      = c0              , & ! for bottom flux
-         l_skS        = 0.028_dbl_kind  , & ! characteristic skeletal layer thickness (m) (zsalinity)
+         l_sk         = 2.0_dbl_kind    , & ! characteristic diffusive scale brine (m)
          algal_vel    = 1.0e-7_dbl_kind , & ! 0.5 cm/d(m/s) Lavoie 2005  1.5 cm/day
          R_dFe2dust   = 0.035_dbl_kind  , & !  g/g (3.5% content) Tagliabue 2009
          dustFe_sol   = 0.005_dbl_kind  , & ! solubility fraction
@@ -553,16 +573,15 @@
          stefan_boltzmann_in, ice_ref_salinity_in, &
          Tffresh_in, Lsub_in, Lvap_in, Timelt_in, Tsmelt_in, &
          iceruf_in, Cf_in, Pstar_in, Cstar_in, kappav_in, &
-         kice_in, ksno_in, &
+         kice_in, ksno_in, itd_area_min_in, itd_mass_min_in, &
          zref_in, hs_min_in, snowpatch_in, rhosi_in, sk_l_in, &
-         saltmax_in, phi_init_in, min_salin_in, salt_loss_in, &
-         Tliquidus_max_in, &
+         saltmax_in, phi_init_in, min_salin_in, Tliquidus_max_in, &
          min_bgc_in, dSin0_frazil_in, hi_ssl_in, hs_ssl_in, hs_ssl_min_in, &
          awtvdr_in, awtidr_in, awtvdf_in, awtidf_in, &
          qqqice_in, TTTice_in, qqqocn_in, TTTocn_in, &
-         ktherm_in, conduct_in, fbot_xfer_type_in, calc_Tsfc_in, dts_b_in, &
+         ktherm_in, conduct_in, fbot_xfer_type_in, calc_Tsfc_in, &
          update_ocn_f_in, ustar_min_in, hi_min_in, a_rapid_mode_in, &
-         cpl_frazil_in, &
+         cpl_frazil_in, semi_implicit_Tsfc_in, vapor_flux_correction_in, &
          Rac_rapid_mode_in, aspect_rapid_mode_in, &
          dSdt_slow_mode_in, phi_c_slow_mode_in, &
          phi_i_mushy_in, shortwave_in, albedo_type_in, albsnowi_in, &
@@ -572,13 +591,12 @@
          atmbndy_in, calc_strair_in, formdrag_in, highfreq_in, natmiter_in, &
          atmiter_conv_in, calc_dragio_in, &
          tfrz_option_in, kitd_in, kcatbound_in, hs0_in, frzpnd_in, &
-         saltflux_option_in, congel_freeze_in, &
+         apnd_sl_in, saltflux_option_in, congel_freeze_in, &
          floeshape_in, wave_spec_in, wave_spec_type_in, nfreq_in, &
          dpscale_in, rfracmin_in, rfracmax_in, pndaspect_in, hs1_in, hp1_in, &
          bgc_flux_type_in, z_tracers_in, scale_bgc_in, solve_zbgc_in, &
          modal_aero_in, use_macromolecules_in, restartbgc_in, skl_bgc_in, &
-         solve_zsal_in, grid_o_in, l_sk_in, &
-         initbio_frac_in, grid_oS_in, l_skS_in,  dEdd_algae_in, &
+         grid_o_in, l_sk_in, initbio_frac_in, dEdd_algae_in, &
          phi_snow_in, T_max_in, fsal_in, use_atm_dust_iron_in, &
          fr_resp_in, algal_vel_in, R_dFe2dust_in, dustFe_sol_in, &
          op_dep_min_in, fr_graze_s_in, fr_graze_e_in, fr_mort2min_in, &
@@ -587,6 +605,7 @@
          y_sk_DMS_in, t_sk_conv_in, t_sk_ox_in, frazil_scav_in, &
          sw_redist_in, sw_frac_in, sw_dtemp_in, snwgrain_in, &
          snwredist_in, use_smliq_pnd_in, rsnw_fall_in, rsnw_tmax_in, &
+         snw_growth_wet_in, drsnw_min_in, snwliq_max_in, &
          rhosnew_in, rhosmin_in, rhosmax_in, windmin_in, drhosdwind_in, &
          snwlvlfac_in, isnw_T_in, isnw_Tgrd_in, isnw_rhos_in, &
          snowage_rhos_in, snowage_Tgrd_in, snowage_T_in, &
@@ -678,7 +697,6 @@
          saltmax_in,    & ! max salinity at ice base for BL99 (ppt)
          phi_init_in,   & ! initial liquid fraction of frazil
          min_salin_in,  & ! threshold for brine pocket treatment
-         salt_loss_in,  & ! fraction of salt retained in zsalinity
          Tliquidus_max_in, & ! maximum liquidus temperature of mush (C)
          dSin0_frazil_in  ! bulk salinity reduction of newly formed frazil
 
@@ -697,10 +715,12 @@
          calc_Tsfc_in    , &! if true, calculate surface temperature
                             ! if false, Tsfc is computed elsewhere and
                             ! atmos-ice fluxes are provided to CICE
+         semi_implicit_Tsfc_in   , &! compute dfsurf/dT, dflat/dT terms instead of fsurf, flat
+         vapor_flux_correction_in, &! compute mass/enthalpy correction when evaporation/sublimation
+                            ! computed outside at 0C
          update_ocn_f_in    ! include fresh water and salt fluxes for frazil
 
       real (kind=dbl_kind), intent(in), optional :: &
-         dts_b_in,   &      ! zsalinity timestep
          hi_min_in,  &      ! minimum ice thickness allowed (m) for thermo
          ustar_min_in       ! minimum friction velocity for ice-ocean heat flux
 
@@ -783,14 +803,16 @@
 !-----------------------------------------------------------------------
 
       real(kind=dbl_kind), intent(in), optional :: &
-         Cf_in,         & ! ratio of ridging work to PE change in ridging
-         Pstar_in,      & ! constant in Hibler strength formula
-         Cstar_in,      & ! constant in Hibler strength formula
-         dragio_in,     & ! ice-ocn drag coefficient
+         itd_area_min_in,         & ! zap residual ice below this minimum area
+         itd_mass_min_in,         & ! zap residual ice below this minimum mass
+         Cf_in,                   & ! ratio of ridging work to PE change in ridging
+         Pstar_in,                & ! constant in Hibler strength formula
+         Cstar_in,                & ! constant in Hibler strength formula
+         dragio_in,               & ! ice-ocn drag coefficient
          thickness_ocn_layer1_in, & ! thickness of first ocean level (m)
-         iceruf_ocn_in, & ! under-ice roughness (m)
-         gravit_in,     & ! gravitational acceleration (m/s^2)
-         iceruf_in        ! ice surface roughness (m)
+         iceruf_ocn_in,           & ! under-ice roughness (m)
+         gravit_in,               & ! gravitational acceleration (m/s^2)
+         iceruf_in                  ! ice surface roughness (m)
 
       integer (kind=int_kind), intent(in), optional :: & ! defined in namelist
          kstrength_in  , & ! 0 for simple Hibler (1979) formulation
@@ -885,19 +907,14 @@
          conserv_check_in     ! if .true., run conservation checks and abort if checks fail
 
       logical (kind=log_kind), intent(in), optional :: &
-         skl_bgc_in,        &   ! if true, solve skeletal biochemistry
-         solve_zsal_in          ! if true, update salinity profile from solve_S_dt
+         skl_bgc_in         ! if true, solve skeletal biochemistry
 
       real (kind=dbl_kind), intent(in), optional :: &
          grid_o_in      , & ! for bottom flux
-         l_sk_in        , & ! characteristic diffusive scale (zsalinity) (m)
+         l_sk_in        , & ! characteristic diffusive scale (m)
          grid_o_t_in    , & ! top grid point length scale
          initbio_frac_in, & ! fraction of ocean tracer concentration used to initialize tracer
          phi_snow_in        ! snow porosity at the ice/snow interface
-
-      real (kind=dbl_kind), intent(in), optional :: &
-         grid_oS_in     , & ! for bottom flux (zsalinity)
-         l_skS_in           ! 0.02 characteristic skeletal layer thickness (m) (zsalinity)
 
       real (kind=dbl_kind), intent(in), optional :: &
          ratio_Si2N_diatoms_in, &   ! algal Si to N (mol/mol)
@@ -1032,7 +1049,7 @@
       real (kind=dbl_kind), intent(in), optional :: &
          hs0_in             ! snow depth for transition to bare sea ice (m)
 
-      ! level-ice ponds
+      ! level-ice and sealvl ponds
       character (len=*), intent(in), optional :: &
          frzpnd_in          ! pond refreezing parameterization
 
@@ -1042,6 +1059,10 @@
          rfracmax_in, &     ! maximum retained fraction of meltwater
          pndaspect_in, &    ! ratio of pond depth to pond fraction
          hs1_in             ! tapering parameter for snow on pond ice
+
+      ! sealvl ponds
+      real (kind=dbl_kind), intent(in), optional :: &
+         apnd_sl_in         ! equilibrium pond fraction for sea level parameterization
 
       ! topo ponds
       real (kind=dbl_kind), intent(in), optional :: &
@@ -1067,7 +1088,10 @@
          rhosmax_in, &      ! maximum snow density (kg/m^3)
          windmin_in, &      ! minimum wind speed to compact snow (m/s)
          drhosdwind_in, &   ! wind compaction factor (kg s/m^4)
-         snwlvlfac_in       ! fractional increase in snow depth
+         snwlvlfac_in, &    ! fractional increase in snow depth
+         snw_growth_wet_in,&! wet metamorphism parameter (um^3/s)
+         drsnw_min_in, &    ! minimum snow grain growth factor
+         snwliq_max_in      ! irreducible saturation fraction
 
       integer (kind=int_kind), intent(in), optional :: &
          isnw_T_in, &       ! maxiumum temperature index
@@ -1132,6 +1156,8 @@
       if (present(Tsmelt_in)            ) Tsmelt           = Tsmelt_in
       if (present(ice_ref_salinity_in)  ) ice_ref_salinity = ice_ref_salinity_in
       if (present(iceruf_in)            ) iceruf           = iceruf_in
+      if (present(itd_area_min_in)      ) itd_area_min     = itd_area_min_in
+      if (present(itd_mass_min_in)      ) itd_mass_min     = itd_mass_min_in
       if (present(Cf_in)                ) Cf               = Cf_in
       if (present(Pstar_in)             ) Pstar            = Pstar_in
       if (present(Cstar_in)             ) Cstar            = Cstar_in
@@ -1146,7 +1172,6 @@
       if (present(saltmax_in)           ) saltmax          = saltmax_in
       if (present(phi_init_in)          ) phi_init         = phi_init_in
       if (present(min_salin_in)         ) min_salin        = min_salin_in
-      if (present(salt_loss_in)         ) salt_loss        = salt_loss_in
       if (present(Tliquidus_max_in)     ) Tliquidus_max    = Tliquidus_max_in
       if (present(min_bgc_in)           ) min_bgc          = min_bgc_in
       if (present(dSin0_frazil_in)      ) dSin0_frazil     = dSin0_frazil_in
@@ -1166,9 +1191,10 @@
       if (present(conduct_in)           ) conduct          = conduct_in
       if (present(fbot_xfer_type_in)    ) fbot_xfer_type   = fbot_xfer_type_in
       if (present(calc_Tsfc_in)         ) calc_Tsfc        = calc_Tsfc_in
+      if (present(semi_implicit_Tsfc_in)) semi_implicit_Tsfc= semi_implicit_Tsfc_in
+      if (present(vapor_flux_correction_in)) vapor_flux_correction= vapor_flux_correction_in
       if (present(cpl_frazil_in)        ) cpl_frazil       = cpl_frazil_in
       if (present(update_ocn_f_in)      ) update_ocn_f     = update_ocn_f_in
-      if (present(dts_b_in)             ) dts_b            = dts_b_in
       if (present(ustar_min_in)         ) ustar_min        = ustar_min_in
       if (present(hi_min_in)            ) hi_min           = hi_min_in
       if (present(a_rapid_mode_in)      ) a_rapid_mode     = a_rapid_mode_in
@@ -1216,6 +1242,7 @@
       if (present(rfracmin_in)          ) rfracmin         = rfracmin_in
       if (present(rfracmax_in)          ) rfracmax         = rfracmax_in
       if (present(pndaspect_in)         ) pndaspect        = pndaspect_in
+      if (present(apnd_sl_in)           ) apnd_sl          = apnd_sl_in
       if (present(hs1_in)               ) hs1              = hs1_in
       if (present(hp1_in)               ) hp1              = hp1_in
       if (present(snwredist_in)         ) snwredist        = snwredist_in
@@ -1230,6 +1257,9 @@
       if (present(windmin_in)           ) windmin          = windmin_in
       if (present(drhosdwind_in)        ) drhosdwind       = drhosdwind_in
       if (present(snwlvlfac_in)         ) snwlvlfac        = snwlvlfac_in
+      if (present(snw_growth_wet_in)    ) snw_growth_wet   = snw_growth_wet_in
+      if (present(drsnw_min_in)         ) drsnw_min        = drsnw_min_in
+      if (present(snwliq_max_in)        ) snwliq_max       = snwliq_max_in
 
       !-------------------
       ! SNOW table
@@ -1362,19 +1392,11 @@
       if (present(restartbgc_in)     ) restartbgc    = restartbgc_in
       if (present(conserv_check_in)     ) conserv_check    = conserv_check_in
       if (present(skl_bgc_in)           ) skl_bgc          = skl_bgc_in
-      if (present(solve_zsal_in)) then
-         call icepack_warnings_add(subname//' WARNING: zsalinity is deprecated')
-         if (solve_zsal_in) then
-            call icepack_warnings_setabort(.true.,__FILE__,__LINE__)
-         endif
-      endif
       if (present(grid_o_in)            ) grid_o           = grid_o_in
       if (present(l_sk_in)              ) l_sk             = l_sk_in
       if (present(grid_o_t_in)          ) grid_o_t         = grid_o_t_in
       if (present(frazil_scav_in)       ) frazil_scav      = frazil_scav_in
       if (present(initbio_frac_in)      ) initbio_frac     = initbio_frac_in
-      if (present(grid_oS_in)           ) grid_oS          = grid_oS_in
-      if (present(l_skS_in)             ) l_skS            = l_skS_in
       if (present(phi_snow_in)          ) phi_snow         = phi_snow_in
 
       if (present(ratio_Si2N_diatoms_in) ) ratio_Si2N_diatoms = ratio_Si2N_diatoms_in
@@ -1564,31 +1586,29 @@
          stefan_boltzmann_out, ice_ref_salinity_out, &
          Tffresh_out, Lsub_out, Lvap_out, Timelt_out, Tsmelt_out, &
          iceruf_out, Cf_out, Pstar_out, Cstar_out, kappav_out, &
-         kice_out, ksno_out, &
+         kice_out, ksno_out, itd_area_min_out, itd_mass_min_out, &
          zref_out, hs_min_out, snowpatch_out, rhosi_out, sk_l_out, &
-         saltmax_out, phi_init_out, min_salin_out, salt_loss_out, &
-         Tliquidus_max_out, &
+         saltmax_out, phi_init_out, min_salin_out, Tliquidus_max_out, &
          min_bgc_out, dSin0_frazil_out, hi_ssl_out, hs_ssl_out, hs_ssl_min_out, &
          awtvdr_out, awtidr_out, awtvdf_out, awtidf_out, cpl_frazil_out, &
          qqqice_out, TTTice_out, qqqocn_out, TTTocn_out, update_ocn_f_out, &
          Lfresh_out, cprho_out, Cp_out, ustar_min_out, hi_min_out, a_rapid_mode_out, &
-         ktherm_out, conduct_out, fbot_xfer_type_out, calc_Tsfc_out, dts_b_out, &
+         ktherm_out, conduct_out, fbot_xfer_type_out, calc_Tsfc_out, &
          Rac_rapid_mode_out, aspect_rapid_mode_out, dSdt_slow_mode_out, &
-         phi_c_slow_mode_out, phi_i_mushy_out, shortwave_out, &
-         albedo_type_out, albicev_out, albicei_out, albsnowv_out, &
+         phi_c_slow_mode_out, phi_i_mushy_out, shortwave_out, semi_implicit_Tsfc_out, &
+         albedo_type_out, albicev_out, albicei_out, albsnowv_out, vapor_flux_correction_out, &
          albsnowi_out, ahmax_out, R_ice_out, R_pnd_out, R_snw_out, dT_mlt_out, &
          rsnw_mlt_out, dEdd_algae_out, &
          kalg_out, R_gC2molC_out, kstrength_out, krdg_partic_out, krdg_redist_out, mu_rdg_out, &
          atmbndy_out, calc_strair_out, formdrag_out, highfreq_out, natmiter_out, &
          atmiter_conv_out, calc_dragio_out, &
          tfrz_option_out, kitd_out, kcatbound_out, hs0_out, frzpnd_out, &
-         saltflux_option_out, congel_freeze_out, &
+         apnd_sl_out, saltflux_option_out, congel_freeze_out, &
          floeshape_out, wave_spec_out, wave_spec_type_out, nfreq_out, &
          dpscale_out, rfracmin_out, rfracmax_out, pndaspect_out, hs1_out, hp1_out, &
          bgc_flux_type_out, z_tracers_out, scale_bgc_out, solve_zbgc_out, &
          modal_aero_out, use_macromolecules_out, restartbgc_out, use_atm_dust_iron_out, &
-         skl_bgc_out, solve_zsal_out, grid_o_out, l_sk_out, &
-         initbio_frac_out, grid_oS_out, l_skS_out, &
+         skl_bgc_out, grid_o_out, l_sk_out, initbio_frac_out, &
          phi_snow_out, conserv_check_out, &
          fr_resp_out, algal_vel_out, R_dFe2dust_out, dustFe_sol_out, &
          T_max_out, fsal_out, op_dep_min_out, fr_graze_s_out, fr_graze_e_out, &
@@ -1597,6 +1617,7 @@
          y_sk_DMS_out, t_sk_conv_out, t_sk_ox_out, frazil_scav_out, &
          sw_redist_out, sw_frac_out, sw_dtemp_out, snwgrain_out, &
          snwredist_out, use_smliq_pnd_out, rsnw_fall_out, rsnw_tmax_out, &
+         snw_growth_wet_out, drsnw_min_out, snwliq_max_out, &
          rhosnew_out, rhosmin_out, rhosmax_out, windmin_out, drhosdwind_out, &
          snwlvlfac_out, isnw_T_out, isnw_Tgrd_out, isnw_rhos_out, &
          snowage_rhos_out, snowage_Tgrd_out, snowage_T_out, &
@@ -1696,7 +1717,6 @@
          saltmax_out,    & ! max salinity at ice base for BL99 (ppt)
          phi_init_out,   & ! initial liquid fraction of frazil
          min_salin_out,  & ! threshold for brine pocket treatment
-         salt_loss_out,  & ! fraction of salt retained in zsalinity
          Tliquidus_max_out, & ! maximum liquidus temperature of mush (C)
          dSin0_frazil_out  ! bulk salinity reduction of newly formed frazil
 
@@ -1715,10 +1735,12 @@
          calc_Tsfc_out    ,&! if true, calculate surface temperature
                             ! if false, Tsfc is computed elsewhere and
                             ! atmos-ice fluxes are provided to CICE
+         semi_implicit_Tsfc_out    ,&! compute dfsurf/dT, dflat/dT terms instead of fsurf, flat
+         vapor_flux_correction_out ,&! compute mass/enthalpy correction when evaporation/sublimation
+                            ! computed outside at 0C
          update_ocn_f_out   ! include fresh water and salt fluxes for frazil
 
       real (kind=dbl_kind), intent(out), optional :: &
-         dts_b_out,   &      ! zsalinity timestep
          hi_min_out,  &      ! minimum ice thickness allowed (m) for thermo
          ustar_min_out       ! minimum friction velocity for ice-ocean heat flux
 
@@ -1803,14 +1825,16 @@
 !-----------------------------------------------------------------------
 
       real(kind=dbl_kind), intent(out), optional :: &
-         Cf_out,         & ! ratio of ridging work to PE change in ridging
-         Pstar_out,      & ! constant in Hibler strength formula
-         Cstar_out,      & ! constant in Hibler strength formula
-         dragio_out,     & ! ice-ocn drag coefficient
+         itd_area_min_out,         & ! zap residual ice below this minimum area
+         itd_mass_min_out,         & ! zap residual ice below this minimum mass
+         Cf_out,                   & ! ratio of ridging work to PE change in ridging
+         Pstar_out,                & ! constant in Hibler strength formula
+         Cstar_out,                & ! constant in Hibler strength formula
+         dragio_out,               & ! ice-ocn drag coefficient
          thickness_ocn_layer1_out, & ! thickness of first ocean level (m)
-         iceruf_ocn_out, & ! under-ice roughness (m)
-         gravit_out,     & ! gravitational acceleration (m/s^2)
-         iceruf_out        ! ice surface roughness (m)
+         iceruf_ocn_out,           & ! under-ice roughness (m)
+         gravit_out,               & ! gravitational acceleration (m/s^2)
+         iceruf_out                  ! ice surface roughness (m)
 
       integer (kind=int_kind), intent(out), optional :: & ! defined in namelist
          kstrength_out  , & ! 0 for simple Hibler (1979) formulation
@@ -1905,19 +1929,14 @@
          conserv_check_out     ! if .true., run conservation checks and abort if checks fail
 
       logical (kind=log_kind), intent(out), optional :: &
-         skl_bgc_out,        &   ! if true, solve skeletal biochemistry
-         solve_zsal_out          ! if true, update salinity profile from solve_S_dt
+         skl_bgc_out         ! if true, solve skeletal biochemistry
 
       real (kind=dbl_kind), intent(out), optional :: &
          grid_o_out      , & ! for bottom flux
-         l_sk_out        , & ! characteristic diffusive scale (zsalinity) (m)
+         l_sk_out        , & ! characteristic diffusive scale (m)
          grid_o_t_out    , & ! top grid point length scale
          initbio_frac_out, & ! fraction of ocean tracer concentration used to initialize tracer
          phi_snow_out        ! snow porosity at the ice/snow interface
-
-      real (kind=dbl_kind), intent(out), optional :: &
-         grid_oS_out     , & ! for bottom flux (zsalinity)
-         l_skS_out           ! 0.02 characteristic skeletal layer thickness (m) (zsalinity)
 
       real (kind=dbl_kind), intent(out), optional :: &
          ratio_Si2N_diatoms_out, &   ! algal Si to N (mol/mol)
@@ -2052,7 +2071,7 @@
       real (kind=dbl_kind), intent(out), optional :: &
          hs0_out             ! snow depth for transition to bare sea ice (m)
 
-      ! level-ice ponds
+      ! level-ice and sealvl ponds
       character (len=*), intent(out), optional :: &
          frzpnd_out          ! pond refreezing parameterization
 
@@ -2062,6 +2081,10 @@
          rfracmax_out, &     ! maximum retained fraction of meltwater
          pndaspect_out, &    ! ratio of pond depth to pond fraction
          hs1_out             ! tapering parameter for snow on pond ice
+
+      ! sealvl ponds
+      real (kind=dbl_kind), intent(out), optional :: &
+         apnd_sl_out         ! equilibrium pond fraction for sea level parameterization
 
       ! topo ponds
       real (kind=dbl_kind), intent(out), optional :: &
@@ -2087,7 +2110,10 @@
          rhosmax_out, &      ! maximum snow density (kg/m^3)
          windmin_out, &      ! minimum wind speed to compact snow (m/s)
          drhosdwind_out, &   ! wind compaction factor (kg s/m^4)
-         snwlvlfac_out       ! fractional increase in snow depth
+         snwlvlfac_out,  &   ! fractional increase in snow depth
+         snw_growth_wet_out,&! wet metamorphism parameter (um^3/s)
+         drsnw_min_out, &    ! minimum snow grain growth factor
+         snwliq_max_out      ! irreducible saturation fraction
 
       integer (kind=int_kind), intent(out), optional :: &
          isnw_T_out, &       ! maxiumum temperature index
@@ -2185,6 +2211,8 @@
       if (present(ice_ref_salinity_out)  ) ice_ref_salinity_out = ice_ref_salinity
       if (present(iceruf_out)            ) iceruf_out       = iceruf
       if (present(Cf_out)                ) Cf_out           = Cf
+      if (present(itd_area_min_out)      ) itd_area_min_out = itd_area_min
+      if (present(itd_mass_min_out)      ) itd_mass_min_out = itd_mass_min
       if (present(Pstar_out)             ) Pstar_out        = Pstar
       if (present(Cstar_out)             ) Cstar_out        = Cstar
       if (present(kappav_out)            ) kappav_out       = kappav
@@ -2198,7 +2226,6 @@
       if (present(saltmax_out)           ) saltmax_out      = saltmax
       if (present(phi_init_out)          ) phi_init_out     = phi_init
       if (present(min_salin_out)         ) min_salin_out    = min_salin
-      if (present(salt_loss_out)         ) salt_loss_out    = salt_loss
       if (present(Tliquidus_max_out)     ) Tliquidus_max_out= Tliquidus_max
       if (present(min_bgc_out)           ) min_bgc_out      = min_bgc
       if (present(dSin0_frazil_out)      ) dSin0_frazil_out = dSin0_frazil
@@ -2218,9 +2245,10 @@
       if (present(conduct_out)           ) conduct_out      = conduct
       if (present(fbot_xfer_type_out)    ) fbot_xfer_type_out = fbot_xfer_type
       if (present(calc_Tsfc_out)         ) calc_Tsfc_out    = calc_Tsfc
+      if (present(semi_implicit_Tsfc_out)) semi_implicit_Tsfc_out= semi_implicit_Tsfc
+      if (present(vapor_flux_correction_out)) vapor_flux_correction_out= vapor_flux_correction
       if (present(cpl_frazil_out)        ) cpl_frazil_out   = cpl_frazil
       if (present(update_ocn_f_out)      ) update_ocn_f_out = update_ocn_f
-      if (present(dts_b_out)             ) dts_b_out        = dts_b
       if (present(ustar_min_out)         ) ustar_min_out    = ustar_min
       if (present(hi_min_out)            ) hi_min_out       = hi_min
       if (present(a_rapid_mode_out)      ) a_rapid_mode_out = a_rapid_mode
@@ -2268,6 +2296,7 @@
       if (present(rfracmin_out)          ) rfracmin_out     = rfracmin
       if (present(rfracmax_out)          ) rfracmax_out     = rfracmax
       if (present(pndaspect_out)         ) pndaspect_out    = pndaspect
+      if (present(apnd_sl_out)           ) apnd_sl_out      = apnd_sl
       if (present(hs1_out)               ) hs1_out          = hs1
       if (present(hp1_out)               ) hp1_out          = hp1
       if (present(snwredist_out)         ) snwredist_out    = snwredist
@@ -2282,6 +2311,9 @@
       if (present(windmin_out)           ) windmin_out      = windmin
       if (present(drhosdwind_out)        ) drhosdwind_out   = drhosdwind
       if (present(snwlvlfac_out)         ) snwlvlfac_out    = snwlvlfac
+      if (present(snw_growth_wet_out)    ) snw_growth_wet_out = snw_growth_wet
+      if (present(drsnw_min_out)         ) drsnw_min_out    = drsnw_min
+      if (present(snwliq_max_out)        ) snwliq_max_out   = snwliq_max
       if (present(isnw_T_out)            ) isnw_T_out       = isnw_T
       if (present(isnw_Tgrd_out)         ) isnw_Tgrd_out    = isnw_Tgrd
       if (present(isnw_rhos_out)         ) isnw_rhos_out    = isnw_rhos
@@ -2303,13 +2335,10 @@
       if (present(restartbgc_out)        ) restartbgc_out= restartbgc
       if (present(conserv_check_out)     ) conserv_check_out= conserv_check
       if (present(skl_bgc_out)           ) skl_bgc_out      = skl_bgc
-      if (present(solve_zsal_out)        ) solve_zsal_out   = solve_zsal
       if (present(grid_o_out)            ) grid_o_out       = grid_o
       if (present(l_sk_out)              ) l_sk_out         = l_sk
       if (present(initbio_frac_out)      ) initbio_frac_out = initbio_frac
       if (present(frazil_scav_out)       ) frazil_scav_out  = frazil_scav
-      if (present(grid_oS_out)           ) grid_oS_out      = grid_oS
-      if (present(l_skS_out)             ) l_skS_out        = l_skS
       if (present(grid_o_t_out)          ) grid_o_t_out      = grid_o_t
       if (present(phi_snow_out)          ) phi_snow_out     = phi_snow
       if (present(ratio_Si2N_diatoms_out) ) ratio_Si2N_diatoms_out = ratio_Si2N_diatoms
@@ -2483,6 +2512,8 @@
         write(iounit,*) "  Tsmelt     = ",Tsmelt
         write(iounit,*) "  ice_ref_salinity = ",ice_ref_salinity
         write(iounit,*) "  iceruf     = ",iceruf
+        write(iounit,*) "  itd_area_min = ",itd_area_min
+        write(iounit,*) "  itd_mass_min = ",itd_mass_min
         write(iounit,*) "  Cf         = ",Cf
         write(iounit,*) "  Pstar      = ",Pstar
         write(iounit,*) "  Cstar      = ",Cstar
@@ -2497,7 +2528,6 @@
         write(iounit,*) "  saltmax    = ",saltmax
         write(iounit,*) "  phi_init   = ",phi_init
         write(iounit,*) "  min_salin  = ",min_salin
-        write(iounit,*) "  salt_loss  = ",salt_loss
         write(iounit,*) "  Tliquidus_max = ",Tliquidus_max
         write(iounit,*) "  min_bgc    = ",min_bgc
         write(iounit,*) "  dSin0_frazil = ",dSin0_frazil
@@ -2528,9 +2558,10 @@
         write(iounit,*) "  conduct    = ", trim(conduct)
         write(iounit,*) "  fbot_xfer_type = ", trim(fbot_xfer_type)
         write(iounit,*) "  calc_Tsfc  = ", calc_Tsfc
+        write(iounit,*) "  semi_implicit_Tsfc = ", semi_implicit_Tsfc
+        write(iounit,*) "  vapor_flux_correction = ", vapor_flux_correction
         write(iounit,*) "  cpl_frazil = ", cpl_frazil
         write(iounit,*) "  update_ocn_f = ", update_ocn_f
-        write(iounit,*) "  dts_b      = ", dts_b
         write(iounit,*) "  ustar_min  = ", ustar_min
         write(iounit,*) "  hi_min     = ", hi_min
         write(iounit,*) "  a_rapid_mode = ", a_rapid_mode
@@ -2578,6 +2609,7 @@
         write(iounit,*) "  rfracmin   = ", rfracmin
         write(iounit,*) "  rfracmax   = ", rfracmax
         write(iounit,*) "  pndaspect  = ", pndaspect
+        write(iounit,*) "  apnd_sl    = ", apnd_sl
         write(iounit,*) "  hs1        = ", hs1
         write(iounit,*) "  hp1        = ", hp1
         write(iounit,*) "  snwredist  = ", trim(snwredist)
@@ -2592,6 +2624,9 @@
         write(iounit,*) "  windmin    = ", windmin
         write(iounit,*) "  drhosdwind = ", drhosdwind
         write(iounit,*) "  snwlvlfac  = ", snwlvlfac
+        write(iounit,*) "  snw_growth_wet = ", snw_growth_wet
+        write(iounit,*) "  drsnw_min  = ", drsnw_min
+        write(iounit,*) "  snwliq_max = ", snwliq_max
         write(iounit,*) "  isnw_T     = ", isnw_T
         write(iounit,*) "  isnw_Tgrd  = ", isnw_Tgrd
         write(iounit,*) "  isnw_rhos  = ", isnw_rhos
@@ -2613,14 +2648,11 @@
         write(iounit,*) "  restartbgc = ", restartbgc
         write(iounit,*) "  conserv_check = ", conserv_check
         write(iounit,*) "  skl_bgc    = ", skl_bgc
-        write(iounit,*) "  solve_zsal = ", solve_zsal
         write(iounit,*) "  grid_o     = ", grid_o
         write(iounit,*) "  l_sk       = ", l_sk
         write(iounit,*) "  grid_o_t   = ", grid_o_t
         write(iounit,*) "  initbio_frac = ", initbio_frac
         write(iounit,*) "  frazil_scav= ", frazil_scav
-        write(iounit,*) "  grid_oS    = ", grid_oS
-        write(iounit,*) "  l_skS      = ", l_skS
         write(iounit,*) "  phi_snow   = ", phi_snow
 
         write(iounit,*) "  ratio_Si2N_diatoms = ", ratio_Si2N_diatoms
