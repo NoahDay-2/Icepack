@@ -662,9 +662,10 @@
 
       use icedrv_arrays_column, only: wave_spectrum, wave_sig_ht, &
           d_afsd_wave, wavefreq, dwavefreq
-      use icedrv_domain_size, only: ncat, nfreq, nx
+      use icedrv_domain_size, only: ncat, nfsd, nfreq, nx
       use icedrv_state, only: trcrn, aicen, aice, vice
-      use icepack_intfc, only: icepack_step_wavefracture
+      use icepack_intfc, only: icepack_step_wavefracture_alt
+      use icepack_fsd, only: floe_rad_l, floe_rad_c
 
       real (kind=dbl_kind), intent(in) :: &
          dt      ! time step
@@ -686,12 +687,25 @@
              file=__FILE__,line= __LINE__)
 
       do i = 1, nx
-           d_afsd_wave(i,:) = c0
-           call icepack_step_wavefracture (wave_spec_type=wave_spec_type, &
-                        dt=dt, nfreq=nfreq,                    &
+            d_afsd_wave(i,:) = c0
+         !   call icepack_step_wavefracture (wave_spec_type=wave_spec_type, &
+         !                dt=dt, nfreq=nfreq,                    &
+         !                aice          = aice         (i),      &
+         !                vice          = vice         (i),      &
+         !                aicen         = aicen        (i,:),    &
+         !                wave_spectrum = wave_spectrum(i,:),    &
+         !                wavefreq      = wavefreq     (:),      &
+         !                dwavefreq     = dwavefreq    (:),      &
+         !                trcrn         = trcrn        (i,:,:),  &
+         !                d_afsd_wave   = d_afsd_wave  (i,:))
+
+            call icepack_step_wavefracture_alt (wave_spec_type=wave_spec_type, &
+                        dt=dt, ncat=ncat, nfsd=nfsd, nfreq=nfreq, &
                         aice          = aice         (i),      &
                         vice          = vice         (i),      &
                         aicen         = aicen        (i,:),    &
+                        floe_rad_l    = floe_rad_l,            &  
+                        floe_rad_c    = floe_rad_c,            &  
                         wave_spectrum = wave_spectrum(i,:),    &
                         wavefreq      = wavefreq     (:),      &
                         dwavefreq     = dwavefreq    (:),      &
