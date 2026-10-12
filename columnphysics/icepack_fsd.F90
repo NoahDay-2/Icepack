@@ -45,6 +45,7 @@
       use icepack_kinds
       use icepack_parameters, only: c0, c1, c2, c4, p01, p1, p5, puny
       use icepack_parameters, only: pi, floeshape, c_weld, weld_method, &
+         weld_conc_exponent, &
          wave_dep_welding, wave_spec, bignum, gravit, rhoi
       use icepack_tracers, only: nt_fsd, tr_fsd, nfsd, ncat
       use icepack_warnings, only: warnstr, icepack_warnings_add
@@ -868,6 +869,19 @@
 !  case of a fully covered ice surface (aice=1), equal to twice the reduction
 !  in total floe number. See Roach, Smith & Dean (2018).
 !
+!  The dependence on ice concentration is controlled by weld_conc_exponent.
+!  Roach, Smith & Dean (2018) eq. 6 gives dN/dt = -(c_weld/2)*aice^2, the square
+!  arising because the geometric probability of overlap is the product of two
+!  area fractions, and their Fig. 9 regresses observed welds per unit area
+!  against aice^2 (R^2 = 0.51, p < 1%). Since afsd is normalised to sum to one
+!  over the ice area, the ocean-area fraction in a bin is aice*afsd, so the
+!  product of two such fractions carries aice^2.
+!  Historically this routine applied a single factor of aicen, making the
+!  welding rate linear in concentration. weld_conc_exponent = 1 reproduces that
+!  behaviour exactly (the default, for backward compatibility);
+!  weld_conc_exponent = 2 recovers the published law. The two agree at aice = 1
+!  and diverge as 1/aice below it, i.e. most strongly in the marginal ice zone.
+!
 !
 !  authors: Lettie Roach, NIWA/VUW
 !
@@ -938,6 +952,7 @@
          max_rate   , & ! maximum rate of change of afsdn (1/s)
          rate       , & ! rate of change of afsdn (1/s)
          safety_factor, & ! safety factor for subcycling
+         aice_fac   , & ! aicen**weld_conc_exponent, the concentration dependence
          wave_sig_ht_local ! wave height value when optional argument is absent
 
       logical (kind=log_kind) :: &
@@ -980,6 +995,11 @@
              (aicen(n) > aminweld) .and. &         ! low concentrations unlikely to weld
              (SUM(afsdn(1:nfsd-1,n)) > puny)) then ! some ice in nfsd-1 categories
 
+            ! Concentration dependence of the welding rate. See the header comment:
+            ! weld_conc_exponent = 1 is the historical behaviour, 2 is the
+            ! dN/dt = -(c_weld/2)*aice^2 law of Roach, Smith & Dean (2018).
+            aice_fac = aicen(n)**weld_conc_exponent
+
             afsd_init(:) = afsdn(:,n)     ! save initial values
             afsd_tmp (:) = afsd_init(:)   ! work array
 
@@ -992,7 +1012,8 @@
             DO WHILE (elapsed_t < dt)
 
                ! calculate sub timestep
-               if (trim(weld_method) == 'constant') then
+               if (trim(weld_method) == 'constant' .or. &
+                   trim(weld_method) == 'excluded_area') then
                   max_rate = c0
 
                   do i = 1, nfsd
@@ -1006,13 +1027,17 @@
                         ni = afsd_tmp(i) / floe_area_c(i)
                         nj = afsd_tmp(j) / floe_area_c(j)
 
-                        ! collision kernel: constant in floe-number space, scaled by ice area
-                        kern = c_weld
+                        ! collision kernel, in floe-number space, scaled by ice area
+                        if (trim(weld_method) == 'excluded_area') then
+                           kern = weld_kernel_exc(i,j)
+                        else
+                           kern = c_weld
+                        end if
 
                         if (i == j) then
-                           rate = 0.5_dbl_kind * kern * aicen(n) * ni * ni
+                           rate = 0.5_dbl_kind * kern * aice_fac * ni * ni
                         else
-                           rate = kern * aicen(n) * ni * nj
+                           rate = kern * aice_fac * ni * nj
                         end if
 
                         if (rate > max_rate) max_rate = rate
@@ -1030,7 +1055,7 @@
                else
                   nfsd_tmp = afsd_tmp/floe_area_c
                   WHERE (afsd_tmp > puny) &
-                     stability = nfsd_tmp/(c_weld*afsd_tmp*aicen(n))
+                     stability = nfsd_tmp/(c_weld*afsd_tmp*aice_fac)
                   WHERE (stability < puny) stability = bignum
                   subdt = MINVAL(stability)
                   subdt = MIN(subdt, dt - elapsed_t)
@@ -1039,25 +1064,30 @@
                loss(:) = c0
                gain(:) = c0
 
-               if (trim(weld_method) == 'constant') then
+               if (trim(weld_method) == 'constant' .or. &
+                   trim(weld_method) == 'excluded_area') then
                   do i = 1, nfsd ! consider loss from this category
                   do j = i, nfsd ! consider all interaction partners
                      k = iweld_limited(i,j) ! product of i+j, capped by waves
                      if (k > i) then
-                        kern = c_weld
+                        if (trim(weld_method) == 'excluded_area') then
+                           kern = weld_kernel_exc(i,j)
+                        else
+                           kern = c_weld
+                        end if
                         if (i == j) then
                            ! self-collision: area loss and gain include size factors
-                           loss(i) = loss(i) + kern * aicen(n) * afsd_tmp(i)**2 &
+                           loss(i) = loss(i) + kern * aice_fac * afsd_tmp(i)**2 &
                                         / floe_area_c(i)
-                           gain(k) = gain(k) + 0.5_dbl_kind * kern * aicen(n) &
+                           gain(k) = gain(k) + 0.5_dbl_kind * kern * aice_fac &
                                         * afsd_tmp(i)**2 * floe_area_c(k) / &
                                         floe_area_c(i)**2
                         else
-                           loss(i) = loss(i) + kern * aicen(n) * afsd_tmp(i)*afsd_tmp(j) &
+                           loss(i) = loss(i) + kern * aice_fac * afsd_tmp(i)*afsd_tmp(j) &
                                         / floe_area_c(j)
-                           loss(j) = loss(j) + kern * aicen(n) * afsd_tmp(i)*afsd_tmp(j) &
+                           loss(j) = loss(j) + kern * aice_fac * afsd_tmp(i)*afsd_tmp(j) &
                                         / floe_area_c(i)
-                           gain(k) = gain(k) + kern * aicen(n) * afsd_tmp(i)*afsd_tmp(j) &
+                           gain(k) = gain(k) + kern * aice_fac * afsd_tmp(i)*afsd_tmp(j) &
                                         * floe_area_c(k) / &
                                         (floe_area_c(i)*floe_area_c(j))
                         end if
@@ -1069,7 +1099,7 @@
                   do j = 1, nfsd ! consider all interaction partners
                      k = iweld_limited(i,j) ! product of i+j, capped by waves
                      if (k > i) then
-                        kern = c_weld * floe_area_c(i) * aicen(n)
+                        kern = c_weld * floe_area_c(i) * aice_fac
                         loss(i) = loss(i) + kern*afsd_tmp(i)*afsd_tmp(j)
                         gain(k) = gain(k) + kern*afsd_tmp(i)*afsd_tmp(j)
                      end if
@@ -1117,6 +1147,54 @@
       end do    ! k
 
       end subroutine fsd_weld_thermo
+
+!=======================================================================
+!
+!  Excluded-area ("Minkowski") welding kernel.
+!
+!  For two convex bodies placed at random in a domain, the probability that
+!  they overlap is proportional to the area of their Minkowski sum,
+!
+!      A_exc(x,x') = x + x' + P(x) P(x') / (2 pi)
+!
+!  which for discs is exactly pi (r + r')^2. This is the geometric overlap
+!  probability that the welding scheme is meant to represent. It differs from
+!  the 'multiplicative' kernel K = c_weld x x' of Roach, Smith & Dean (2018),
+!  which is the product of two area fractions -- the probability that two
+!  independent random *points* fall inside the two floes, not an overlap
+!  probability.
+!
+!  Two practical consequences:
+!    * c_weld has units of s^-1 under this method (a welding frequency: how
+!      often contact results in a weld), not m^-2 s^-1 as for 'multiplicative'
+!      or m^2 s^-1 as for 'constant'. Values are NOT interchangeable between
+!      methods.
+!    * The fractional rate of floe-number loss, (1/N) dN/dt = -2 c_weld aice
+!      for a monodisperse population, is independent of floe size. The
+!      multiplicative kernel's equivalent scales with floe area, which is why
+!      its rate constant has to be retuned whenever the floe size range or the
+!      FSD discretisation changes.
+!
+!  Perimeter follows the CICE convention P = 2 A / r, consistent with the
+!  lateral-surface-area treatment elsewhere in this module, so
+!      P_i P_j / (2 pi) = 2 A_i A_j / (pi r_i r_j).
+!
+!  authors: added for the MCW floe-size sensitivity study
+!
+      function weld_kernel_exc(i, j) result(kern)
+
+      integer (kind=int_kind), intent(in) :: &
+         i, j           ! floe size category indices
+
+      real (kind=dbl_kind) :: &
+         kern           ! coagulation kernel (m^2 s^-1)
+
+      kern = c_weld * (floe_area_c(i) + floe_area_c(j)                  &
+                       + c2*floe_area_c(i)*floe_area_c(j)               &
+                         / (pi*floe_rad_c(i)*floe_rad_c(j)))
+
+      end function weld_kernel_exc
+
 
 !=======================================================================
 !

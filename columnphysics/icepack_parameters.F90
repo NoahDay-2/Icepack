@@ -325,6 +325,11 @@
       real (kind=dbl_kind), public :: &
          floeshape = 0.66_dbl_kind, & ! constant from Rothrock 1984 (unitless)
          c_weld    = 1.0e-6_dbl_kind ! welding proportionality constant (m^-2 s^-1)
+      real (kind=dbl_kind), public :: &
+         weld_conc_exponent = c1     ! exponent of ice concentration in the floe welding
+                                     ! rate. 1 reproduces the historical Icepack behaviour;
+                                     ! 2 gives the dN/dt = -(c_weld/2)*aice^2 law of
+                                     ! Roach, Smith & Dean (2018). See doc for details.
 
       real (kind=dbl_kind), public :: &
          wavefrac_min_sig_ht  = 0.001_dbl_kind,  & ! minimum wave height for wave fracture (m)
@@ -603,7 +608,8 @@
          atmiter_conv_in, calc_dragio_in, &
          tfrz_option_in, kitd_in, kcatbound_in, hs0_in, frzpnd_in, &
          apnd_sl_in, saltflux_option_in, congel_freeze_in, &
-         floeshape_in, c_weld_in, wavefrac_min_sig_ht_in, critical_strain_in, &
+         floeshape_in, c_weld_in, weld_conc_exponent_in, &
+         wavefrac_min_sig_ht_in, critical_strain_in, &
          critical_probability_in, mean_ln_slope_in, var_ln_const_in, &
          weld_method_in, wave_spec_in, wave_dep_welding_in, &
          wave_spec_type_in, wave_height_type_in, nfreq_in, &
@@ -894,6 +900,7 @@
       real (kind=dbl_kind), intent(in), optional :: &
          floeshape_in, &      ! constant from Rothrock 1984 (unitless)
          c_weld_in, &         ! welding proportionality constant (m^-2 s^-1)
+         weld_conc_exponent_in, & ! exponent of aice in the welding rate
          wavefrac_min_sig_ht_in, & ! minimum wave height for wave fracture (m)
          critical_strain_in, & ! critical strain threshold
          critical_probability_in, & ! breaking probability threshold
@@ -1257,6 +1264,7 @@
       if (present(kcatbound_in)         ) kcatbound        = kcatbound_in
       if (present(floeshape_in)         ) floeshape        = floeshape_in
       if (present(c_weld_in)            ) c_weld          = c_weld_in
+      if (present(weld_conc_exponent_in)) weld_conc_exponent = weld_conc_exponent_in
       if (present(wavefrac_min_sig_ht_in)) wavefrac_min_sig_ht = wavefrac_min_sig_ht_in
       if (present(critical_strain_in)   ) critical_strain = critical_strain_in
       if (present(critical_probability_in)) critical_probability = critical_probability_in
@@ -1636,7 +1644,8 @@
          atmiter_conv_out, calc_dragio_out, &
          tfrz_option_out, kitd_out, kcatbound_out, hs0_out, frzpnd_out, &
          apnd_sl_out, saltflux_option_out, congel_freeze_out, &
-         floeshape_out, c_weld_out, wavefrac_min_sig_ht_out, critical_strain_out, &
+         floeshape_out, c_weld_out, weld_conc_exponent_out, &
+         wavefrac_min_sig_ht_out, critical_strain_out, &
          critical_probability_out, mean_ln_slope_out, var_ln_const_out, &
          weld_method_out, wave_spec_out, wave_dep_welding_out, &
          wave_spec_type_out, wave_height_type_out, nfreq_out, &
@@ -1937,6 +1946,7 @@
       real (kind=dbl_kind), intent(out), optional :: &
          floeshape_out, &     ! constant from Rothrock 1984 (unitless)
          c_weld_out, &        ! welding proportionality constant (m^-2 s^-1)
+         weld_conc_exponent_out, & ! exponent of aice in the welding rate
          wavefrac_min_sig_ht_out, & ! minimum wave height for wave fracture (m)
          critical_strain_out, & ! critical strain threshold
          critical_probability_out, & ! breaking probability threshold
@@ -2332,6 +2342,7 @@
       if (present(kcatbound_out)         ) kcatbound_out    = kcatbound
       if (present(floeshape_out)         ) floeshape_out    = floeshape
       if (present(c_weld_out)           ) c_weld_out      = c_weld
+      if (present(weld_conc_exponent_out)) weld_conc_exponent_out = weld_conc_exponent
       if (present(wavefrac_min_sig_ht_out)) wavefrac_min_sig_ht_out = wavefrac_min_sig_ht
       if (present(critical_strain_out) ) critical_strain_out = critical_strain
       if (present(critical_probability_out)) critical_probability_out = critical_probability
@@ -2654,6 +2665,7 @@
         write(iounit,*) "  kcatbound  = ", kcatbound
         write(iounit,*) "  floeshape  = ", floeshape
         write(iounit,*) "  c_weld     = ", c_weld
+        write(iounit,*) "  weld_conc_exponent = ", weld_conc_exponent
         write(iounit,*) "  wavefrac_min_sig_ht   = ", wavefrac_min_sig_ht
         write(iounit,*) "  critical_strain       = ", critical_strain
         write(iounit,*) "  critical_probability  = ", critical_probability
